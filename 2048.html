@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2048 AI Master</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 50px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            background-color: #faf8ef;
+            touch-action: none;
+        }
+
+        .container {
+            width: 90vmin;
+            height: 90vmin;
+            max-width: 500px;
+            max-height: 500px;
+            background: #bbada0;
+            padding: 10px;
+            border-radius: 10px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .cell {
+            position: absolute;
+            width: 22.5%;
+            height: 22.5%;
+            background: #cdc1b4;
+            border-radius: 5px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 4vmin;
+            font-weight: bold;
+            transition: transform 0.2s ease-in-out, opacity 0.2s;
+        }
+
+        .tile {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: 5px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            transition: transform 0.2s ease-in-out, opacity 0.2s;
+        }
+
+        .controls {
+            margin: 20px;
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 18px;
+            background: #8f7a66;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        button:hover {
+            background: #7d6e5c;
+        }
+
+        .score {
+            margin: 20px;
+            font-size: 24px;
+            color: #776e65;
+        }
+
+        @keyframes pop {
+            0% { transform: scale(0); opacity: 0; }
+            50% { transform: scale(1.2); opacity: 1; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .new-tile {
+            animation: pop 0.2s ease-in-out;
+        }
+
+        .merge {
+            animation: merge 0.2s ease-in-out;
+            z-index: 10;
+        }
+
+        @keyframes merge {
+            from { transform: scale(1); }
+            to { transform: scale(1.2); }
+        }
+    </style>
+</head>
+<body>
+    <h1>2048 AI Master</h1>
+    <div class="score">Score: <span id="score">0</span></div>
+    <div class="controls">
+        <button id="autoPlayBtn">Start AI</button>
+        <button id="resetBtn">New Game</button>
+    </div>
+    <div class="container" id="container"></div>
+
+    <script>
+        const board = document.getElementById('container');
+        const scoreDisplay = document.getElementById('score');
+        const autoPlayBtn = document.getElementById('autoPlayBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        
+        let grid = [];
+        let score = 0;
+        let tiles = [];
+        let animationQueue = [];
+        let autoPlayInterval = null;
+        let touchStartX = 0;
+        let touchStartY = 0;
+        let workerPool = [];
+
+        // 初始化游戏
+        function init() {
+            terminateWorkers();
+            createWorkerPool(4);
+            clearInterval(autoPlayInterval);
+            autoPlayBtn.textContent = 'Start AI';
+            grid = Array.from({ length: 4 }, () => Array(4).fill(0));
+            tiles = Array.from({ length: 4 }, () => Array(4).fill(null));
+            score = 0;
+            scoreDisplay.textContent = score;
+            addRandomTile();
+            addRandomTile();
+            render();
+        }
+
+        // 创建Web Worker池
+        function createWorkerPool(size) {
+            terminateWorkers();
+            workerPool = Array.from({ length: size }, () => {
+                const worker = new Worker(URL.createObjectURL(new Blob([`
+                    (${workerFunction.toString()})()
+                `], { type: 'application/javascript' })));
+                worker.busy = false;
+                return worker;
+            });
+        }
+
+        // 终止所有Worker
+        function terminateWorkers() {
+            workerPool.forEach(worker => worker.terminate());
+            workerPool = [];
+        }
+
+        // Web Worker核心函数
+        function workerFunction() {
+            // 添加置换表缓存已计算结果
+            const transpositionTable = new Map();
+            
+            const WEIGHTS = {
+                emptyCells: 1000,
+                maxTile: 8000, // 增加最大块的权重
+                monotonicity: 1500,
+                smoothness: 1000,
+                corner: 5000,  // 增加角落的权重
+                adjacency: -500,
+                gradient: 200,
+                futurePotential: 1500
+            };
+            
+            // 根据游戏阶段调整权重
+            function getAdjustedWeights(grid) {
+                const maxVal = Math.max(...grid.flat());
+                const weights = {...WEIGHTS};
+                
+                // 早期阶段更关注空格和平滑度
+                if (maxVal < 512) {
+                    weights.emptyCells *= 1.5;
+                    weights.smoothness *= 1.2;
+                }
+                // 中期更关注模式和单调性
+                else if (maxVal < 2048) {
+                    weights.monotonicity *= 1.3;
+                    weights.gradient *= 1.5;
+                }
+                // 后期更关注角落和最大值
+                else {
+                    weights.corner *= 1.5;
+                    weights.maxTile *= 1.3;
+                }
+                
+                return weights;
+            }
+
+            self.addEventListener('message', async (e) => {
+                const { grid, depth, timeLimit } = e.data;
+                const startTime = Date.now();
+                // 使用迭代加深搜索
+                let result = null;
+                let currentDepth = 1;
+                
+                while (currentDepth <= depth && (Date.now() - startTime < (timeLimit || 45))) {
+                    const moveResult = expectiMaxWithTime(grid, currentDepth, startTime, timeLimit || 45);
+                    if (moveResult) {
+                        result = moveResult;
+                    }
+                    currentDepth++;
+                }
+                
+                self.postMessage(result || {dir: getBestDirection(grid)});
+            });
+
+            function expectiMaxWithTime(grid, depth, startTime, timeLimit) {
+                // 检查是否超时
+                if (Date.now() - startTime > timeLimit) return null;
+                
+                // 检查缓存
+                const gridKey = JSON.stringify(grid) + "_" + depth;
+                if (transpositionTable.has(gridKey)) {
+                    return transpositionTable.get(gridKey);
+                }
+
+                let bestScore = -Infinity;
+                let bestMove = null;
+
+                const moves = ['up', 'down', 'left', 'right']
+                    .filter(dir => canMove(grid, dir))
+                    .map(dir => ({ dir, grid: simulateMove(grid, dir).newGrid }));moved: simulateMove(grid, dir).moved }));
+
+                if (moves.length === 0) return null;
+
+                for (const { dir, grid: newGrid } of moves) {{
+                    const score = evaluateGrid(newGrid);
+                    if (score > bestScore) {
+                        // 递归调用expectiMaxWithTime，进行更深层次的搜索
+                        const nextMove = expectiMaxWithTime(newGrid, depth - 1, startTime, timeLimit);
+                        if (nextMove) {ove = expectiMaxWithTime(newGrid, depth - 1, startTime, timeLimit);
+                            score = nextMove.score; // 使用下一层搜索的分数
+                                score = nextMove.score; // 使用下一层搜索的分数
+                            } else {
+                                score = evaluateGrid(newGrid); // 如果下一层搜索超时，则使用当前评估函数
+                            }
+                        } else {
+                            score = evaluateGrid(newGrid); // 达到深度限制，使用评估函数
+                        }
+                    } else {
+                        score = -Infinity; // 如果无法移动，则给出一个很低的分数
+                    }
+
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestMove = { dir, score };
+                    }
+                }
+                
+                // 存入置换表
+                transpositionTable.set(gridKey, bestMove);
+                return bestMove;
+            }
+
+            // 添加一个简单的启发式函数，当超时时使用
+            function getBestDirection(grid) {
+                const scores = {};
+                ['up', 'right', 'down', 'left'].forEach(dir => {
+                    if (canMove(grid, dir)) {
+                        const { newGrid } = simulateMove(grid, dir);
+                        scores[dir] = evaluateGrid(newGrid);
+                    }
+                });
+                
+                // 找出最高分的方向
+                let bestDir = 'up';
+                let bestScore = -Infinity;
+                for (const [dir, score] of Object.entries(scores)) {
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestDir = dir;
+                    }
+                }
+                return bestDir;
+            }
+
+            // 其他现有函数保持不变...
+            function simulateMove(grid, direction) {
+                const newGrid = JSON.parse(JSON.stringify(grid));
+                let moved = false;
+                let newScore = 0;
+                
+                if (direction === 'up' || direction === 'down') {
+                    const isUp = direction === 'up';
+                    for (let col = 0; col < 4; col++) {
+                        const column = [];
+                        for (let row = 0; row < 4; row++) {
+                            column.push(newGrid[row][col]);
+                        }
+                        
+                        const { newLine, lineMoved, lineScore } = mergeLine(column, isUp);
+                        
+                        moved = moved || lineMoved;
+                        newScore += lineScore;
+                        
+                        for (let row = 0; row < 4; row++) {
+                            newGrid[row][col] = newLine[row];
+                        }
+                    }
+                } else {
+                    const isLeft = direction === 'left';
+                    for (let row = 0; row < 4; row++) {
+                        const line = [...newGrid[row]];
+                        const { newLine, lineMoved, lineScore } = mergeLine(line, isLeft);
+                        
+                        moved = moved || lineMoved;
+                        newScore += lineScore;
+                        
+                        newGrid[row] = newLine;
+                    }
+                }
+                
+                return { newGrid, moved, newScore };
+            }
+            
+            function mergeLine(line, isFirstDirection) {
+                const result = Array(4).fill(0);
+                let lineMoved = false;
+                let lineScore = 0;
+                let position = isFirstDirection ? 0 : 3;
+                
+                const numbers = line.filter(n => n !== 0);
+                if (isFirstDirection === false) numbers.reverse();
+                
+                for (let i = 0; i < numbers.length; i++) {
+                    if (i < numbers.length - 1 && numbers[i] === numbers[i + 1]) {
+                        const mergedValue = numbers[i] * 2;
+                        result[position] = mergedValue;
+                        position += isFirstDirection ? 1 : -1;
+                        lineScore += mergedValue;
+                        i++;
+                    } else {
+                        result[position] = numbers[i];
+                        position += isFirstDirection ? 1 : -1;
+                    }
+                }
+                
+                for (let i = 0; i < 4; i++) {
+                    if (result[i] !== line[i]) {
+                        lineMoved = true;
+                        break;
+                    }
+                }
+                
+                if (!isFirstDirection) {
+                    result.reverse();
+                }
+                
+                return { newLine: result, lineMoved, lineScore };
+            }
+
+            function canMove(grid, direction) {
+                if (direction === 'up') {
+                    for (let j = 0; j < 4; j++) {
+                        for (let i = 1; i < 4; i++) {
+                            if ((grid[i][j] !== 0) && 
+                                (grid[i-1][j] === 0 || grid[i-1][j] === grid[i][j])) {
+                                return true;
+                            }
+                        }
+                    }
+                } else if (direction === 'down') {
+                    for (let j = 0; j < 4; j++) {
+                        for (let i = 0; i < 3; i++) {
+                            if ((grid[i][j] !== 0) && 
+                                (grid[i+1][j] === 0 || grid[i+1][j] === grid[i][j])) {
+                                return true;
+                            }
+                        }
+                    }
+                } else if (direction === 'left') {
+                    for (let i = 0; i < 4; i++) {
+                        for (let j = 1; j < 4; j++) {
+                            if ((grid[i][j] !== 0) && 
+                                (grid[i][j-1] === 0 || grid[i][j-1] === grid[i][j])) {
+                                return true;
+                            }
+                        }
+                    }
+                } else if (direction === 'right') {
+                    for (let i = 0; i < 4; i++) {
+                        for (let j = 0; j < 3; j++) {
+                            if ((grid[i][j] !== 0) && 
+                                (grid[i][j+1] === 0 || grid[i][j+1] === grid[i][j])) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                return false;
+            }
+
+            function evaluateGrid(grid) {
+                return WEIGHTS.emptyCells * countEmpty(grid)
+                     + WEIGHTS.maxTile * getMaxTile(grid)
+                     + WEIGHTS.monotonicity * calculateMonotonicity(grid)
+                     + WEIGHTS.smoothness * calculateSmoothness(grid)
+                     + WEIGHTS.corner * cornerBonus(grid)
+                     + WEIGHTS.adjacency * adjacencyPenalty(grid)
+                     + WEIGHTS.gradient * gradientScore(grid)
+                     + WEIGHTS.futurePotential * futurePotential(grid);
+            }
+
+            function countEmpty(grid) {
+                return grid.flat().filter(cell => cell === 0).length;
+            }
+
+            function getMaxTile(grid) {
+                return Math.log2(Math.max(...grid.flat().filter(cell => cell > 0)));
+            }
+
+            function calculateMonotonicity(grid) {
+                let score = 0;
+                // 水平单调性
+                for (let i = 0; i < 4; i++) {
+                    let current = 0;
+                    let next = current + 1;
+                    while (next < 4) {
+                        while (next < 4 && grid[i][next] === 0) next++;
+                        if (next >= 4) break;
+                        
+                        if (grid[i][current] > 0 && grid[i][next] > 0) {
+                            if (grid[i][current] > grid[i][next]) {
+                                score++;
+                            } else if (grid[i][current] < grid[i][next]) {
+                                score--;
+                            }
+                        }
+                        current = next;
+                        next++;
+                    }
+                }
+                // 垂直单调性
+                for (let j = 0; j < 4; j++) {
+                    let current = 0;
+                    let next = current + 1;
+                    while (next < 4) {
+                        while (next < 4 && grid[next][j] === 0) next++;
+                        if (next >= 4) break;
+                        
+                        if (grid[current][j] > 0 && grid[next][j] > 0) {
+                            if (grid[current][j] > grid[next][j]) {
+                                score++;
+                            } else if (grid[current][j] < grid[next][j]) {
+                                score--;
+                            }
+                        }
+                        current = next;
+                        next++;
+                    }
+                }
+                return score;
+            }
+
+            function calculateSmoothness(grid) {
+                let smoothness = 0;
+                for (let i = 0; i < 4; i++) {
+                    for (let j = 0; j < 4; j++) {
+                        if (grid[i][j] !== 0) {
+                            const value = Math.log2(grid[i][j]);
+                            // 检查右边
+                            if (j < 3 && grid[i][j+1] !== 0) {
+                                smoothness -= Math.abs(value - Math.log2(grid[i][j+1]));
+                            }
+                            // 检查下边
+                            if (i < 3 && grid[i+1][j] !== 0) {
+                                smoothness -= Math.abs(value - Math.log2(grid[i+1][j]));
+                            }
+                        }
+                    }
+                }
+                return smoothness;
+            }
+
+            function cornerBonus(grid) {
+                let bonus = 0;
+                const corners = [[0,0], [0,3], [3,0], [3,3]];
+                
+                for (const [i, j] of corners) {
+                    if (grid[i][j] !== 0) {
+                        bonus += Math.log2(grid[i][j]);
+                    }
+                }
+                
+                // 特别奖励最大值在角落
+                const maxVal = Math.max(...grid.flat());
+                if (grid[0][0] === maxVal || grid[0][3] === maxVal || 
+                    grid[3][0] === maxVal || grid[3][3] === maxVal) {
+                    bonus += Math.log2(maxVal);
+                }
+                
+                return bonus;
+            }
+
+            function adjacencyPenalty(grid) {
+                // 相邻格子数值差距大时的惩罚
+                let penalty = 0;
+                for (let i = 0; i < 4; i++) {
+                    for (let j = 0; j < 4; j++) {
+                        if (grid[i][j] !== 0) {
+                            if (j < 3 && grid[i][j+1] !== 0) {
+                                penalty += Math.abs(Math.log2(grid[i][j]) - Math.log2(grid[i][j+1]));
+                            }
+                            if (i < 3 && grid[i+1][j] !== 0) {
+                                penalty += Math.abs(Math.log2(grid[i][j]) - Math.log2(grid[i+1][j]));
+                            }
+                        }
+                    }
+                }
+                return -penalty; // 返回负值作为惩罚
+            }
+
+            function gradientScore(grid) {
+                // 设置期望的梯度模式（例如蛇形模式）
+                const patterns = [
+                    // 蛇形模式（向右增长，然后向左增长...）
+                    [
+                        [15, 14, 13, 12],
+                        [8, 9, 10, 11],
+                        [7, 6, 5, 4],
+                        [0, 1, 2, 3]
+                    ],
+                    // 向右上角增长
+                    [
+                        [12, 13, 14, 15],
+                        [8, 9, 10, 11],
+                        [4, 5, 6, 7],
+                        [0, 1, 2, 3]
+                    ]
+                ];
+                
+                let maxScore = -Infinity;
+                for (const pattern of patterns) {
+                    let score = 0;
+                    for (let i = 0; i < 4; i++) {
+                        for (let j = 0; j < 4; j++) {
+                            if (grid[i][j] !== 0) {
+                                // 根据模式中的位置给予加权
+                                score += grid[i][j] * pattern[i][j];
+                            }
+                        }
+                    }
+                    maxScore = Math.max(maxScore, score);
+                }
+                return maxScore / 1000;
+            }
+
+            function futurePotential(grid) {
+                // 评估当前格局可能产生的未来移动空间
+                let potentialMoves = 0;
+                for (const direction of ['up', 'down', 'left', 'right']) {
+                    if (canMove(grid, direction)) {
+                        potentialMoves++;
+                    }
+                }
+                return potentialMoves;
+            }
+        }
+
+        // 生成随机数（2或4）
+        function getRandomNumber() {
+            return Math.random() < 0.9 ? 2 : 4;
+        }
+
+        // 添加随机方块
+        function addRandomTile() {
+            const emptyCells = [];
+            grid.forEach((row, i) => {
+                row.forEach((cell, j) => {
+                    if (cell === 0) emptyCells.push({ i, j });
+                });
+            });
+            if (emptyCells.length > 0) {
+                const { i, j } = emptyCells[Math.floor(Math.random() * emptyCells.length)];
+                grid[i][j] = getRandomNumber();
+                animationQueue.push({ type: 'new', i, j, value: grid[i][j] });
+            }
+        }
+
+        // 渲染游戏界面
+        function render() {
+            board.innerHTML = '';
+            tiles.forEach((row, i) => {
+                row.forEach((tile, j) => {
+                    if (grid[i][j] !== 0) {
+                        const cellDiv = document.createElement('div');
+                        cellDiv.className = 'cell';
+                        cellDiv.style.left = `${j * 26.5}%`;
+                        cellDiv.style.top = `${i * 26.5}%`;
+                        
+                        const tileDiv = document.createElement('div');
+                        tileDiv.className = 'tile';
+                        tileDiv.textContent = grid[i][j];
+                        tileDiv.style.backgroundColor = getTileColor(grid[i][j]);
+                        tileDiv.style.color = grid[i][j] > 4 ? '#f9f6f2' : '#776e65';
+                        
+                        if (animationQueue.find(a => a.type === 'new' && a.i === i && a.j === j)) {
+                            tileDiv.classList.add('new-tile');
+                        }
+                        
+                        if (animationQueue.find(a => a.type === 'merge' && a.i === i && a.j === j)) {
+                            tileDiv.classList.add('merge');
+                            setTimeout(() => tileDiv.classList.remove('merge'), 200);
+                        }
+                        
+                        cellDiv.appendChild(tileDiv);
+                        board.appendChild(cellDiv);
+                    }
+                });
+            });
+            animationQueue = [];
+        }
+
+        // 获取方块颜色
+        function getTileColor(value) {
+            const colors = {
+                2: '#eee4da', 4: '#ede0c8', 8: '#f2b179',
+                16: '#f59563', 32: '#f67c5f', 64: '#f65e3b',
+                128: '#edcf72', 256: '#edcc61', 512: '#edc850',
+                1024: '#edc53f', 2048: '#edc22e'
+            };
+            return colors[value] || '#cdc1b4';
+        }
+
+        // 智能自动游戏
+        function autoPlay() {
+            if (autoPlayInterval) {
+                clearInterval(autoPlayInterval);
+                autoPlayInterval = null;
+                autoPlayBtn.textContent = 'Start AI';
+                return;
+            }
+            
+            autoPlayBtn.textContent = 'Stop AI';
+            const baseDepth = 6;  // 基本深度
+            const timeLimit = 50; // 毫秒
+            
+            autoPlayInterval = setInterval(() => {
+                const availableWorkers = workerPool.filter(w => !w.busy);
+                if (availableWorkers.length === 0) return;
+
+                const worker = availableWorkers[0];
+                worker.busy = true;
+                
+                worker.onmessage = (e) => {
+                    worker.busy = false;
+                    if (e.data && e.data.dir) {
+                        handleMovement(e.data.dir);
+                    }
+                };
+                
+                // 动态计算深度：空格越少，深度越大
+                const emptyCells = grid.flat().filter(c => c === 0).length;
+                const depth = baseDepth + Math.floor((16 - emptyCells) / 4);
+                
+                worker.postMessage({ 
+                    grid: JSON.parse(JSON.stringify(grid)), 
+                    depth: Math.min(depth, 10),  // 最大深度限制为 10
+                    timeLimit 
+                });
+            }, 50);
+        }
+
+        // 处理移动操作
+        function handleMovement(direction) {
+            const { newGrid, moved, newScore } = simulateMove(grid, direction);
+            if (moved) {
+                grid = newGrid;
+                score += newScore;
+                scoreDisplay.textContent = score;
+                addRandomTile();
+                render();
+                checkGameOver();
+            }
+        }
+
+        // 模拟移动
+        function simulateMove(grid, direction) {
+            const newGrid = JSON.parse(JSON.stringify(grid));
+            let moved = false;
+            let newScore = 0;
+            
+            if (direction === 'up' || direction === 'down') {
+                const isUp = direction === 'up';
+                for (let col = 0; col < 4; col++) {
+                    const column = [];
+                    for (let row = 0; row < 4; row++) {
+                        column.push(newGrid[row][col]);
+                    }
+                    
+                    const { newLine, lineMoved, lineScore } = mergeLine(column, isUp);
+                    
+                    moved = moved || lineMoved;
+                    newScore += lineScore;
+                    
+                    for (let row = 0; row < 4; row++) {
+                        newGrid[row][col] = newLine[row];
+                    }
+                }
+            } else {
+                const isLeft = direction === 'left';
+                for (let row = 0; row < 4; row++) {
+                    const line = [...newGrid[row]];
+                    const { newLine, lineMoved, lineScore } = mergeLine(line, isLeft);
+                    
+                    moved = moved || lineMoved;
+                    newScore += lineScore;
+                    
+                    newGrid[row] = newLine;
+                }
+            }
+            
+            return { newGrid, moved, newScore };
+        }
+        
+        // 处理单行/单列的合并逻辑
+        function mergeLine(line, isFirstDirection) {
+            const result = Array(4).fill(0);
+            let lineMoved = false;
+            let lineScore = 0;
+            let position = isFirstDirection ? 0 : 3;
+            
+            // 把所有不为0的数字提取出来
+            const numbers = line.filter(n => n !== 0);
+            if (isFirstDirection === false) numbers.reverse();
+            
+            // 合并相同的数字
+            for (let i = 0; i < numbers.length; i++) {
+                if (i < numbers.length - 1 && numbers[i] === numbers[i + 1]) {
+                    const mergedValue = numbers[i] * 2;
+                    result[position] = mergedValue;
+                    position += isFirstDirection ? 1 : -1;
+                    lineScore += mergedValue;
+                    i++; // 跳过下一个数字
+                    animationQueue.push({ type: 'merge', i: Math.floor(position/4), j: position%4, value: mergedValue });
+                } else {
+                    result[position] = numbers[i];
+                    position += isFirstDirection ? 1 : -1;
+                }
+            }
+            
+            // 检查是否移动了
+            for (let i = 0; i < 4; i++) {
+                if (result[i] !== line[i]) {
+                    lineMoved = true;
+                    break;
+                }
+            }
+            
+            if (!isFirstDirection) {
+                result.reverse();
+            }
+            
+            return { newLine: result, lineMoved, lineScore };
+        }
+
+        // 检查是否可以朝某个方向移动
+        function canMove(direction) {
+            if (direction === 'up') {
+                for (let j = 0; j < 4; j++) {
+                    for (let i = 1; i < 4; i++) {
+                        if ((grid[i][j] !== 0) && 
+                            (grid[i-1][j] === 0 || grid[i-1][j] === grid[i][j])) {
+                            return true;
+                        }
+                    }
+                }
+            } else if (direction === 'down') {
+                for (let j = 0; j < 4; j++) {
+                    for (let i = 0; i < 3; i++) {
+                        if ((grid[i][j] !== 0) && 
+                            (grid[i+1][j] === 0 || grid[i+1][j] === grid[i][j])) {
+                            return true;
+                        }
+                    }
+                }
+            } else if (direction === 'left') {
+                for (let i = 0; i < 4; i++) {
+                    for (let j = 1; j < 4; j++) {
+                        if ((grid[i][j] !== 0) && 
+                            (grid[i][j-1] === 0 || grid[i][j-1] === grid[i][j])) {
+                            return true;
+                        }
+                    }
+                }
+            } else if (direction === 'right') {
+                for (let i = 0; i < 4; i++) {
+                    for (let j = 0; j < 3; j++) {
+                        if ((grid[i][j] !== 0) && 
+                            (grid[i][j+1] === 0 || grid[i][j+1] === grid[i][j])) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        function handleTouchStart(e) {
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+            e.preventDefault();
+        }
+
+        function handleTouchEnd(e) {
+            if (!touchStartX || !touchStartY) return;
+            
+            const touchEndX = e.changedTouches[0].clientX;
+            const touchEndY = e.changedTouches[0].clientY;
+            
+            const dx = touchEndX - touchStartX;
+            const dy = touchEndY - touchStartY;
+            
+            // 根据滑动方向确定移动方向
+            if (Math.abs(dx) > Math.abs(dy)) {
+                // 横向滑动
+                if (dx > 20) {
+                    handleMovement('right');
+                } else if (dx < -20) {
+                    handleMovement('left');
+                }
+            } else {
+                // 纵向滑动
+                if (dy > 20) {
+                    handleMovement('down');
+                } else if (dy < -20) {
+                    handleMovement('up');
+                }
+            }
+            
+            touchStartX = 0;
+            touchStartY = 0;
+            e.preventDefault();
+        }
+
+        function checkGameOver() {
+            // 检查是否有空格
+            for (let i = 0; i < 4; i++) {
+                for (let j = 0; j < 4; j++) {
+                    if (grid[i][j] === 0) return;
+                }
+            }
+            // 检查是否有可合并的方块
+            for (let i = 0; i < 4; i++) {
+                for (let j = 0; j < 3; j++) {
+                    if (grid[i][j] === grid[i][j+1]) return;
+                }
+            }
+            for (let j = 0; j < 4; j++) {
+                for (let i = 0; i < 3; i++) {
+                    if (grid[i][j] === grid[i+1][j]) return;
+                }
+            }
+            // 游戏结束
+            clearInterval(autoPlayInterval);
+            autoPlayInterval = null;
+            autoPlayBtn.textContent = 'Start AI';
+            alert('Game Over! Your score: ' + score);
+        }
+
+        // 其他辅助函数...
+
+        // 事件监听
+        document.addEventListener('keydown', (e) => {
+            switch (e.key) {
+                case 'ArrowUp':
+                    handleMovement('up');
+                    break;
+                case 'ArrowDown':
+                    handleMovement('down');
+                    break;
+                case 'ArrowLeft':
+                    handleMovement('left');
+                    break;
+                case 'ArrowRight':
+                    handleMovement('right');
+                    break;
+            }
+        });
+
+        board.addEventListener('touchstart', handleTouchStart);
+        board.addEventListener('touchend', handleTouchEnd);
+        autoPlayBtn.addEventListener('click', autoPlay);
+        resetBtn.addEventListener('click', init);
+
+        // 初始化游戏
+        init();
+    </script>
+</body>
+</html>

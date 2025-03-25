@@ -101,16 +101,36 @@
             from { transform: scale(1); }
             to { transform: scale(1.2); }
         }
+        
+        /* 添加状态指示器样式 */
+        .status {
+            margin: 10px 0;
+            font-size: 16px;
+            color: #776e65;
+        }
+        
+        .thinking {
+            display: inline-block;
+            animation: pulse 1s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 0.5; }
+            50% { opacity: 1; }
+            100% { opacity: 0.5; }
+        }
     </style>
 </head>
 <body>
     <h1>2048 AI Master</h1>
     <div class="score">Score: <span id="score">0</span></div>
+    <div class="status" id="aiStatus"></div>
     <div class="controls">
         <button id="autoPlayBtn">Start AI</button>
         <select id="algorithmSelect">
             <option value="expectimax">ExpectiMax</option>
             <option value="mcts">MCTS</option>
+            <option value="hybrid">Hybrid (推荐)</option>
         </select>
         <button id="resetBtn">New Game</button>
     </div>
@@ -121,6 +141,7 @@
         const scoreDisplay = document.getElementById('score');
         const autoPlayBtn = document.getElementById('autoPlayBtn');
         const resetBtn = document.getElementById('resetBtn');
+        const aiStatus = document.getElementById('aiStatus');
         
         let grid = [];
         let score = 0;
@@ -146,16 +167,45 @@
             render();
         }
 
-        // 创建Web Worker池
+        // 创建Web Worker池 - 添加错误处理
         function createWorkerPool(size) {
             terminateWorkers();
-            workerPool = Array.from({ length: size }, () => {
-                const worker = new Worker(URL.createObjectURL(new Blob([`
-                    (${workerFunction.toString()})()
-                `], { type: 'application/javascript' })));
-                worker.busy = false;
-                return worker;
-            });
+            
+            try {
+                workerPool = Array.from({ length: size }, () => {
+                    try {
+                        const blob = new Blob([`(${workerFunction.toString()})()`], 
+                            { type: 'application/javascript' });
+                        const url = URL.createObjectURL(blob);
+                        const worker = new Worker(url);
+                        
+                        // 添加基本测试确保worker正常工作
+                        worker.onerror = (e) => {
+                            console.error('Worker error:', e);
+                            aiStatus.innerHTML = `AI错误: ${e.message}`;
+                        };
+                        
+                        worker.busy = false;
+                        return worker;
+                    } catch (e) {
+                        console.error('Failed to create worker:', e);
+                        aiStatus.innerHTML = `无法创建AI处理器: ${e.message}`;
+                        return null;
+                    }
+                }).filter(w => w !== null);
+                
+                // 测试workers是否正常工作
+                if (workerPool.length > 0) {
+                    const testWorker = workerPool[0];
+                    testWorker.postMessage({type: 'test'});
+                    testWorker.onmessage = () => {
+                        console.log('Worker test successful');
+                    };
+                }
+            } catch (e) {
+                console.error('Error creating worker pool:', e);
+                aiStatus.innerHTML = `AI初始化失败: ${e.message}`;
+            }
         }
 
         // 终止所有Worker
@@ -168,43 +218,53 @@
         function workerFunction() {
             // 添加置换表缓存已计算结果
             const transpositionTable = new Map();
+            const patternCache = new Map();
             
             const WEIGHTS = {
                 emptyCells: 1000,
-                maxTile: 8000, // 增加最大块的权重
+                maxTile: 8000, 
                 monotonicity: 1500,
                 smoothness: 1000,
-                corner: 5000,  // 增加角落的权重
+                corner: 5000,  
                 adjacency: -500,
                 gradient: 200,
-                futurePotential: 1500
+                futurePotential: 1500,
+                snakePattern: 3000,  // 新增: 蛇形模式权重
+                mergeOpportunity: 1200  // 新增: 合并机会权重
             };
             
-            // 根据游戏阶段调整权重
+            // 优化: 根据游戏阶段和最大块值更精确地调整权重
             function getAdjustedWeights(grid) {
                 const maxVal = Math.max(...grid.flat());
+                const emptyCellsCount = grid.flat().filter(cell => cell === 0).length;
                 const weights = {...WEIGHTS};
                 
-                // 早期阶段更关注空格和平滑度
-                if (maxVal < 512) {
-                    weights.emptyCells *= 1.5;
-                    weights.smoothness *= 1.2;
+                // 早期阶段 (大量空格, 最大块 < 512)
+                if (maxVal < 512 && emptyCellsCount > 8) {
+                    weights.emptyCells *= 2.0;
+                    weights.smoothness *= 1.5;
+                    weights.snakePattern *= 0.7;  // 早期不太关注蛇形模式
+                    weights.corner *= 0.7;        // 早期不太关注角落
                 }
-                // 中期更关注模式和单调性
-                else if (maxVal < 2048) {
-                    weights.monotonicity *= 1.3;
-                    weights.gradient *= 1.5;
+                // 中期阶段
+                else if (maxVal < 2048 && emptyCellsCount > 4) {
+                    weights.monotonicity *= 1.5;
+                    weights.gradient *= 1.8;
+                    weights.mergeOpportunity *= 1.5; // 中期更关注合并机会
+                    weights.snakePattern *= 1.2;     // 开始关注蛇形模式
                 }
-                // 后期更关注角落和最大值
+                // 后期阶段
                 else {
-                    weights.corner *= 1.5;
-                    weights.maxTile *= 1.3;
+                    weights.corner *= 2.0;       // 后期更关注角落策略
+                    weights.maxTile *= 1.5;      // 后期更关注最大块
+                    weights.snakePattern *= 2.0;  // 后期强调蛇形模式
+                    weights.emptyCells *= 2.5;    // 极度关注空格
                 }
                 
                 return weights;
             }
 
-            // MCTS节点类定义
+            // MCTS节点类定义 - 增强版
             class MCTSNode {
                 constructor(grid, parent = null, move = null) {
                     this.grid = grid;
@@ -215,25 +275,30 @@
                     this.children = {};
                     this.untriedMoves = this.getAvailableMoves();
                     this.isTerminal = this.untriedMoves.length === 0;
+                    this.maxScoreReached = 0; // 记录最高分
+                    this.maxTileReached = 0;  // 记录最大块
                 }
                 
                 getAvailableMoves() {
                     return ['up', 'down', 'left', 'right'].filter(move => canMove(this.grid, move));
                 }
                 
-                // UCB1公式选择节点
+                // 改进UCB1公式，加入动态探索常数
                 selectChild() {
-                    const C = 1.414; // 探索常数
+                    // 动态调整探索参数
+                    const C = this.getDynamicExplorationConstant();
                     let bestScore = -Infinity;
                     let bestChild = null;
                     
                     for (const [move, child] of Object.entries(this.children)) {
                         if (child.visits === 0) return child;
                         
-                        // UCB1公式
+                        // 修改UCB1公式，加入节点质量评估
                         const exploitation = child.score / child.visits;
                         const exploration = C * Math.sqrt(Math.log(this.visits) / child.visits);
-                        const score = exploitation + exploration;
+                        // 增加最大块权重
+                        const maxTileBonus = Math.log2(child.maxTileReached + 1) * 0.1;
+                        const score = exploitation + exploration + maxTileBonus;
                         
                         if (score > bestScore) {
                             bestScore = score;
@@ -243,6 +308,16 @@
                     return bestChild;
                 }
                 
+                // 动态探索常数：游戏早期更多探索，后期更多利用
+                getDynamicExplorationConstant() {
+                    const maxTile = Math.max(...this.grid.flat());
+                    const emptyCells = countEmpty(this.grid);
+                    
+                    if (maxTile >= 1024) return 0.7;  // 后期减少探索
+                    if (emptyCells <= 4) return 0.9;  // 空格少时增加探索
+                    return 1.414; // 默认UCB1探索常数
+                }
+                
                 // 扩展节点
                 expand() {
                     if (this.untriedMoves.length === 0) return null;
@@ -250,57 +325,125 @@
                     const move = this.untriedMoves.pop();
                     const { newGrid } = simulateMove(this.grid, move);
                     
-                    // 随机添加一个2或4
-                    const newGridWithRandom = addRandomTileToGrid(newGrid);
+                    // 添加多个可能的随机格子，增加多样性
+                    const possibleGrids = [];
+                    // 90%概率生成2，10%概率生成4
+                    for (let i = 0; i < 3; i++) {
+                        possibleGrids.push(addRandomTileToGrid(newGrid, i === 0 ? 4 : 2));
+                    }
                     
-                    const child = new MCTSNode(newGridWithRandom, this, move);
+                    // 选择评估分数最低的情况（最差情况）
+                    let worstGrid = possibleGrids[0];
+                    let worstScore = evaluateGrid(worstGrid);
+                    
+                    for (const grid of possibleGrids) {
+                        const score = evaluateGrid(grid);
+                        if (score < worstScore) {
+                            worstScore = score;
+                            worstGrid = grid;
+                        }
+                    }
+                    
+                    const child = new MCTSNode(worstGrid, this, move);
                     this.children[move] = child;
                     return child;
                 }
                 
-                // 随机模拟
+                // 改进: 智能模拟而不是纯随机
                 rollout() {
                     let currentGrid = JSON.parse(JSON.stringify(this.grid));
                     let depth = 0;
                     let totalScore = 0;
+                    let maxTile = Math.max(...currentGrid.flat().filter(v => v > 0));
                     
-                    // 模拟一定步数或直到游戏结束
-                    while (depth < 20) {
+                    // 模拟游戏进行
+                    while (depth < 30) { // 增加模拟深度
                         const availableMoves = ['up', 'down', 'left', 'right']
                             .filter(move => canMove(currentGrid, move));
                             
                         if (availableMoves.length === 0) break;
                         
-                        const randomMove = availableMoves[Math.floor(Math.random() * availableMoves.length)];
-                        const { newGrid, newScore } = simulateMove(currentGrid, randomMove);
+                        // 使用启发式方法选择移动，而不是完全随机
+                        let bestMove = null;
+                        let bestScore = -Infinity;
                         
+                        // 80%使用启发式，20%随机（探索）
+                        if (Math.random() < 0.8) {
+                            for (const move of availableMoves) {
+                                const { newGrid, newScore } = simulateMove(currentGrid, move);
+                                const evalScore = evaluateGrid(newGrid) + newScore;
+                                if (evalScore > bestScore) {
+                                    bestScore = evalScore;
+                                    bestMove = move;
+                                }
+                            }
+                        } else {
+                            bestMove = availableMoves[Math.floor(Math.random() * availableMoves.length)];
+                        }
+                        
+                        const { newGrid, newScore } = simulateMove(currentGrid, bestMove);
                         totalScore += newScore;
-                        currentGrid = addRandomTileToGrid(newGrid);
+                        
+                        // 添加随机格子，但使用最差情况（4而不是2）
+                        currentGrid = addRandomTileToGrid(newGrid, Math.random() < 0.9 ? 2 : 4);
+                        
+                        // 更新最大块
+                        const currentMaxTile = Math.max(...currentGrid.flat());
+                        if (currentMaxTile > maxTile) {
+                            maxTile = currentMaxTile;
+                            // 奖励新的最大块
+                            totalScore += Math.log2(currentMaxTile) * 50;
+                        }
+                        
                         depth++;
                     }
                     
-                    // 评估最终状态
-                    return totalScore + evaluateGrid(currentGrid) * 10;
+                    // 模拟分数 + 评估函数 + 最大块奖励
+                    return totalScore + evaluateGrid(currentGrid) * 15 + Math.log2(maxTile) * 100;
                 }
                 
-                // 反向传播
-                backpropagate(score) {
+                // 反向传播时更新更多信息
+                backpropagate(score, maxTileReached) {
                     let node = this;
                     while (node !== null) {
                         node.visits += 1;
                         node.score += score;
+                        
+                        // 更新最大块记录
+                        if (maxTileReached > node.maxTileReached) {
+                            node.maxTileReached = maxTileReached;
+                        }
+                        
                         node = node.parent;
                     }
                 }
                 
-                // 获取最佳移动
+                // 优化最佳移动选择策略
                 getBestMove() {
-                    let bestScore = -Infinity;
-                    let bestMove = null;
+                    const moves = Object.keys(this.children);
+                    if (moves.length === 0) return null;
                     
-                    for (const [move, child] of Object.entries(this.children)) {
-                        const score = child.visits > 0 ? child.score / child.visits : 0;
-                        if (score > bestScore) {
+                    // 计算每个移动的平均分数和访问次数
+                    const moveScores = {};
+                    for (const move of moves) {
+                        const child = this.children[move];
+                        moveScores[move] = {
+                            avg: child.visits > 0 ? child.score / child.visits : 0,
+                            visits: child.visits,
+                            maxTile: child.maxTileReached
+                        };
+                    }
+                    
+                    // 优先选择分数最高的移动
+                    let bestMove = moves[0];
+                    let bestScore = moveScores[bestMove].avg;
+                    
+                    for (const move of moves) {
+                        const score = moveScores[move].avg;
+                        // 如果分数更高或分数接近但访问次数更多
+                        if (score > bestScore || 
+                            (Math.abs(score - bestScore) < 0.1 * bestScore && 
+                             moveScores[move].visits > moveScores[bestMove].visits)) {
                             bestScore = score;
                             bestMove = move;
                         }
@@ -310,8 +453,8 @@
                 }
             }
 
-            // 添加随机方块到网格
-            function addRandomTileToGrid(grid) {
+            // 改进的随机方块添加函数
+            function addRandomTileToGrid(grid, value = null) {
                 const newGrid = JSON.parse(JSON.stringify(grid));
                 const emptyCells = [];
                 newGrid.forEach((row, i) => {
@@ -322,40 +465,127 @@
                 
                 if (emptyCells.length > 0) {
                     const { i, j } = emptyCells[Math.floor(Math.random() * emptyCells.length)];
-                    newGrid[i][j] = Math.random() < 0.9 ? 2 : 4;
+                    newGrid[i][j] = value || (Math.random() < 0.9 ? 2 : 4);
                 }
                 
                 return newGrid;
             }
 
-            // MCTS主算法
+            // 优化MCTS算法
             function runMCTS(grid, timeLimit) {
                 const startTime = Date.now();
                 const rootNode = new MCTSNode(grid);
                 let iterations = 0;
+                let bestMoveFound = null;
+                let lastIterationTime = Date.now();
                 
+                // 使用所有可用时间
                 while (Date.now() - startTime < timeLimit) {
+                    // 每20ms检查一次时间，减少过多的时间检查
+                    if (Date.now() - lastIterationTime > 20) {
+                        if (Date.now() - startTime >= timeLimit) break;
+                        lastIterationTime = Date.now();
+                    }
+                    
                     // 1. 选择
                     let node = rootNode;
                     while (node.untriedMoves.length === 0 && Object.keys(node.children).length > 0) {
                         node = node.selectChild();
+                        if (!node) break; // 安全检查
                     }
+                    
+                    if (!node) continue; // 如果选择失败，重试
                     
                     // 2. 扩展
+                    let expandedNode = node;
                     if (node.untriedMoves.length > 0 && !node.isTerminal) {
-                        node = node.expand();
+                        expandedNode = node.expand();
                     }
                     
+                    if (!expandedNode) continue; // 如果扩展失败，重试
+                    
                     // 3. 模拟
-                    const score = node.rollout();
+                    const score = expandedNode.rollout();
+                    const maxTile = Math.max(...expandedNode.grid.flat());
                     
                     // 4. 反向传播
-                    node.backpropagate(score);
+                    expandedNode.backpropagate(score, maxTile);
                     
                     iterations++;
+                    
+                    // 每50次迭代更新最佳移动
+                    if (iterations % 50 === 0) {
+                        bestMoveFound = rootNode.getBestMove();
+                    }
                 }
                 
-                return rootNode.getBestMove();
+                // 如果迭代次数太少，使用简单启发式
+                if (iterations < 100) {
+                    return getBestDirection(grid);
+                }
+                
+                return rootNode.getBestMove() || getBestDirection(grid);
+            }
+            
+            // 新增: 混合算法，结合MCTS和ExpectiMax
+            function runHybridAlgorithm(grid, timeLimit) {
+                const startTime = Date.now();
+                const totalTimeLimit = timeLimit;
+                // 根据游戏阶段分配时间比例
+                const emptyCells = countEmpty(grid);
+                const maxVal = Math.max(...grid.flat());
+                
+                // 游戏后期更偏向于MCTS，前期更偏向于ExpectiMax
+                let mctsTimeRatio = 0.5; // 默认均分时间
+                
+                if (maxVal >= 1024 || emptyCells <= 6) {
+                    mctsTimeRatio = 0.7; // 后期和格子少时，MCTS占70%
+                } else if (maxVal <= 128 && emptyCells >= 10) {
+                    mctsTimeRatio = 0.3; // 前期ExpectiMax占70%
+                }
+                
+                const mctsTimeLimit = totalTimeLimit * mctsTimeRatio;
+                const expectiMaxTimeLimit = totalTimeLimit * (1 - mctsTimeRatio);
+                
+                // 先运行ExpectiMax
+                let expectiMaxResult = null;
+                let currentDepth = 1;
+                while (currentDepth <= 5 && (Date.now() - startTime < expectiMaxTimeLimit)) {
+                    const moveResult = expectiMaxWithTime(grid, currentDepth, startTime, expectiMaxTimeLimit);
+                    if (moveResult) {
+                        expectiMaxResult = moveResult;
+                    }
+                    currentDepth++;
+                }
+                
+                // 如果ExpectiMax没有找到结果，使用简单启发式
+                if (!expectiMaxResult) {
+                    const bestDir = getBestDirection(grid);
+                    return { dir: bestDir };
+                }
+                
+                // 再运行MCTS
+                const remainingTime = Math.max(0, totalTimeLimit - (Date.now() - startTime));
+                const mctsDir = runMCTS(grid, remainingTime);
+                
+                // 确保两个方向都有效
+                if (!mctsDir) {
+                    return expectiMaxResult;
+                }
+                
+                // 测试两个算法建议的移动
+                const emResult = simulateMove(grid, expectiMaxResult.dir);
+                const mctsResult = simulateMove(grid, mctsDir);
+                
+                // 计算两种移动的评估分数并选择更好的
+                const emScore = evaluateGrid(emResult.newGrid) + emResult.newScore;
+                const mctsScore = evaluateGrid(mctsResult.newGrid) + mctsResult.newScore;
+                
+                if (mctsScore > emScore * 1.1) { // MCTS需要明显更好才选择(10%以上)
+                    return { dir: mctsDir };
+                }
+                
+                return expectiMaxResult; // 默认使用ExpectiMax结果，包含分数
             }
 
             self.addEventListener('message', async (e) => {
@@ -363,26 +593,45 @@
                 const startTime = Date.now();
                 
                 let result;
-                if (algorithm === 'mcts') {
-                    // 使用MCTS算法
-                    const bestMove = runMCTS(grid, timeLimit || 200);
-                    result = { dir: bestMove };
-                } else {
-                    // 使用现有的ExpectiMax算法
-                    let currentDepth = 1;
-                    while (currentDepth <= depth && (Date.now() - startTime < (timeLimit || 45))) {
-                        const moveResult = expectiMaxWithTime(grid, currentDepth, startTime, timeLimit || 45);
-                        if (moveResult) {
-                            result = moveResult;
+                
+                try {
+                    if (algorithm === 'mcts') {
+                        // 使用改进的MCTS算法
+                        const bestMove = runMCTS(grid, timeLimit || 400);
+                        result = { dir: bestMove };
+                    } 
+                    else if (algorithm === 'hybrid') {
+                        // 使用混合算法
+                        result = runHybridAlgorithm(grid, timeLimit || 300);
+                        
+                        // 错误检查：确保返回结果包含dir属性
+                        if (!result || !result.dir) {
+                            console.error('Hybrid algorithm failed to return valid direction');
+                            result = { dir: getBestDirection(grid) };
                         }
-                        currentDepth++;
                     }
-                    result = result || { dir: getBestDirection(grid) };
+                    else {
+                        // 使用现有的ExpectiMax算法
+                        let currentDepth = 1;
+                        while (currentDepth <= depth && (Date.now() - startTime < (timeLimit || 100))) {
+                            const moveResult = expectiMaxWithTime(grid, currentDepth, startTime, timeLimit || 100);
+                            if (moveResult) {
+                                result = moveResult;
+                            }
+                            currentDepth++;
+                        }
+                        result = result || { dir: getBestDirection(grid) };
+                    }
+                } catch (error) {
+                    // 异常处理：如果算法出错，返回一个安全的移动方向
+                    console.error('AI algorithm error:', error);
+                    result = { dir: getBestDirection(grid) };
                 }
                 
                 self.postMessage(result);
             });
 
+            // ExpectiMax优化
             function expectiMaxWithTime(grid, depth, startTime, timeLimit) {
                 // 检查是否超时
                 if (Date.now() - startTime > timeLimit) return null;
@@ -396,26 +645,41 @@
                 let bestScore = -Infinity;
                 let bestMove = null;
 
-                const moves = ['up', 'down', 'left', 'right']
+                // 优先级排序的移动方向
+                const moveDirections = ['up', 'left', 'down', 'right'];
+                
+                // 根据当前网格调整移动优先级
+                if (grid[0][0] > 0 && grid[0][0] === Math.max(...grid.flat())) {
+                    // 如果左上角有最大值，优先尝试"up"和"left"
+                    moveDirections.sort((a, b) => {
+                        if (a === 'up' || a === 'left') return -1;
+                        if (b === 'up' || b === 'left') return 1;
+                        return 0;
+                    });
+                }
+
+                const moves = moveDirections
                     .filter(dir => canMove(grid, dir))
                     .map(dir => ({ dir, grid: simulateMove(grid, dir).newGrid, moved: simulateMove(grid, dir).moved }));
 
                 if (moves.length === 0) return null;
+                
+                // 如果只剩一种可能移动，直接返回
+                if (moves.length === 1) {
+                    return { dir: moves[0].dir, score: evaluateGrid(moves[0].grid) };
+                }
 
                 for (const { dir, grid: newGrid } of moves) {
                     let score;
                     
                     if (depth > 1) {
-                        // 递归调用expectiMaxWithTime，进行更深层次的搜索
-                        const nextMove = expectiMaxWithTime(newGrid, depth - 1, startTime, timeLimit);
-                        if (nextMove) {
-                            score = nextMove.score; // 使用下一层搜索的分数
-                        } else {
-                            score = evaluateGrid(newGrid); // 如果下一层搜索超时，则使用当前评估函数
-                        }
+                        // 在2和4可能出现的空格位置计算平均分数
+                        score = calculateExpectedScore(newGrid, depth, startTime, timeLimit);
                     } else {
                         score = evaluateGrid(newGrid); // 达到深度限制，使用评估函数
                     }
+                    
+                    if (score === null) return null; // 超时处理
 
                     if (score > bestScore) {
                         bestScore = score;
@@ -427,162 +691,231 @@
                 transpositionTable.set(gridKey, bestMove);
                 return bestMove;
             }
+            
+            // 计算随机添加2或4后的期望得分
+            function calculateExpectedScore(grid, depth, startTime, timeLimit) {
+                const emptyCells = [];
+                grid.forEach((row, i) => {
+                    row.forEach((cell, j) => {
+                        if (cell === 0) emptyCells.push({ i, j });
+                    });
+                });
+                
+                // 如果没有空格，返回当前评估分数
+                if (emptyCells.length === 0) {
+                    return evaluateGrid(grid);
+                }
+                
+                // 只选择部分空格进行采样以提高效率
+                const sampleSize = Math.min(emptyCells.length, 3);
+                const sampledCells = [];
+                
+                // 采样策略: 随机选择几个空格
+                for (let i = 0; i < sampleSize; i++) {
+                    const randIndex = Math.floor(Math.random() * emptyCells.length);
+                    sampledCells.push(emptyCells.splice(randIndex, 1)[0]);
+                }
+                
+                let totalScore = 0;
+                let validSamples = 0;
+                
+                // 对于每个采样的空格，尝试放置2和4
+                for (const { i, j } of sampledCells) {
+                    // 90%概率是2，10%概率是4
+                    const newGridWith2 = JSON.parse(JSON.stringify(grid));
+                    newGridWith2[i][j] = 2;
+                    
+                    const newGridWith4 = JSON.parse(JSON.stringify(grid));
+                    newGridWith4[i][j] = 4;
+                    
+                    // 检查超时
+                    if (Date.now() - startTime > timeLimit) return null;
+                    
+                    // 递归计算下一层
+                    const scoreWith2 = expectiMaxWithTime(newGridWith2, depth - 1, startTime, timeLimit);
+                    if (scoreWith2 === null) return null; // 超时
+                    
+                    const scoreWith4 = expectiMaxWithTime(newGridWith4, depth - 1, startTime, timeLimit);
+                    if (scoreWith4 === null) return null; // 超时
+                    
+                    // 计算加权平均分数 (90% 为2, 10% 为4)
+                    totalScore += 0.9 * scoreWith2.score + 0.1 * scoreWith4.score;
+                    validSamples++;
+                }
+                
+                // 如果没有有效样本，直接返回当前评估
+                if (validSamples === 0) return evaluateGrid(grid);
+                
+                // 返回平均期望分数
+                return totalScore / validSamples;
+            }
 
-            // 添加一个简单的启发式函数，当超时时使用
+            // 优化启发式评估函数
             function getBestDirection(grid) {
                 const scores = {};
                 ['up', 'right', 'down', 'left'].forEach(dir => {
                     if (canMove(grid, dir)) {
                         const { newGrid } = simulateMove(grid, dir);
                         scores[dir] = evaluateGrid(newGrid);
+                    } else {
+                        scores[dir] = -Infinity;
                     }
                 });
                 
                 // 找出最高分的方向
                 let bestDir = 'up';
                 let bestScore = -Infinity;
-                for (const [dir, score] of Object.entries(scores)) {
-                    if (score > bestScore) {
-                        bestScore = score;
+                
+                // 优先级调整: up > left > right > down
+                const directions = ['up', 'left', 'right', 'down'];
+                
+                for (const dir of directions) {
+                    if (scores[dir] > bestScore) {
+                        bestScore = scores[dir];
                         bestDir = dir;
                     }
                 }
+                
                 return bestDir;
             }
 
-            // 其他现有函数保持不变...
-            function simulateMove(grid, direction) {
-                const newGrid = JSON.parse(JSON.stringify(grid));
-                let moved = false;
-                let newScore = 0;
-                
-                if (direction === 'up' || direction === 'down') {
-                    const isUp = direction === 'up';
-                    for (let col = 0; col < 4; col++) {
-                        const column = [];
-                        for (let row = 0; row < 4; row++) {
-                            column.push(newGrid[row][col]);
-                        }
-                        
-                        const { newLine, lineMoved, lineScore } = mergeLine(column, isUp);
-                        
-                        moved = moved || lineMoved;
-                        newScore += lineScore;
-                        
-                        for (let row = 0; row < 4; row++) {
-                            newGrid[row][col] = newLine[row];
-                        }
-                    }
-                } else {
-                    const isLeft = direction === 'left';
-                    for (let row = 0; row < 4; row++) {
-                        const line = [...newGrid[row]];
-                        const { newLine, lineMoved, lineScore } = mergeLine(line, isLeft);
-                        
-                        moved = moved || lineMoved;
-                        newScore += lineScore;
-                        
-                        newGrid[row] = newLine;
-                    }
-                }
-                
-                return { newGrid, moved, newScore };
-            }
-            
-            function mergeLine(line, isFirstDirection) {
-                const result = Array(4).fill(0);
-                let lineMoved = false;
-                let lineScore = 0;
-                let position = isFirstDirection ? 0 : 3;
-                
-                const numbers = line.filter(n => n !== 0);
-                if (isFirstDirection === false) numbers.reverse();
-                
-                for (let i = 0; i < numbers.length; i++) {
-                    if (i < numbers.length - 1 && numbers[i] === numbers[i + 1]) {
-                        const mergedValue = numbers[i] * 2;
-                        result[position] = mergedValue;
-                        position += isFirstDirection ? 1 : -1;
-                        lineScore += mergedValue;
-                        i++;
-                    } else {
-                        result[position] = numbers[i];
-                        position += isFirstDirection ? 1 : -1;
-                    }
-                }
-                
-                for (let i = 0; i < 4; i++) {
-                    if (result[i] !== line[i]) {
-                        lineMoved = true;
-                        break;
-                    }
-                }
-                
-                if (!isFirstDirection) {
-                    result.reverse();
-                }
-                
-                return { newLine: result, lineMoved, lineScore };
-            }
-
-            function canMove(grid, direction) {
-                if (direction === 'up') {
-                    for (let j = 0; j < 4; j++) {
-                        for (let i = 1; i < 4; i++) {
-                            if ((grid[i][j] !== 0) && 
-                                (grid[i-1][j] === 0 || grid[i-1][j] === grid[i][j])) {
-                                return true;
-                            }
-                        }
-                    }
-                } else if (direction === 'down') {
-                    for (let j = 0; j < 4; j++) {
-                        for (let i = 0; i < 3; i++) {
-                            if ((grid[i][j] !== 0) && 
-                                (grid[i+1][j] === 0 || grid[i+1][j] === grid[i][j])) {
-                                return true;
-                            }
-                        }
-                    }
-                } else if (direction === 'left') {
-                    for (let i = 0; i < 4; i++) {
-                        for (let j = 1; j < 4; j++) {
-                            if ((grid[i][j] !== 0) && 
-                                (grid[i][j-1] === 0 || grid[i][j-1] === grid[i][j])) {
-                                return true;
-                            }
-                        }
-                    }
-                } else if (direction === 'right') {
-                    for (let i = 0; i < 4; i++) {
-                        for (let j = 0; j < 3; j++) {
-                            if ((grid[i][j] !== 0) && 
-                                (grid[i][j+1] === 0 || grid[i][j+1] === grid[i][j])) {
-                                return true;
-                            }
-                        }
-                    }
-                }
-                return false;
-            }
-
+            // 优化评估网格函数
             function evaluateGrid(grid) {
-                return WEIGHTS.emptyCells * countEmpty(grid)
-                     + WEIGHTS.maxTile * getMaxTile(grid)
-                     + WEIGHTS.monotonicity * calculateMonotonicity(grid)
-                     + WEIGHTS.smoothness * calculateSmoothness(grid)
-                     + WEIGHTS.corner * cornerBonus(grid)
-                     + WEIGHTS.adjacency * adjacencyPenalty(grid)
-                     + WEIGHTS.gradient * gradientScore(grid)
-                     + WEIGHTS.futurePotential * futurePotential(grid);
+                // 根据当前游戏状态动态调整评估权重
+                const weights = getAdjustedWeights(grid);
+                
+                return weights.emptyCells * countEmpty(grid)
+                     + weights.maxTile * getMaxTile(grid)
+                     + weights.monotonicity * calculateMonotonicity(grid)
+                     + weights.smoothness * calculateSmoothness(grid)
+                     + weights.corner * cornerBonus(grid)
+                     + weights.adjacency * adjacencyPenalty(grid)
+                     + weights.gradient * gradientScore(grid)
+                     + weights.futurePotential * futurePotential(grid)
+                     + weights.snakePattern * evaluateSnakePattern(grid)
+                     + weights.mergeOpportunity * countMergeOpportunities(grid);
             }
+
+            // 计算可能的合并机会
+            function countMergeOpportunities(grid) {
+                let opportunities = 0;
+                
+                // 横向合并机会
+                for (let i = 0; i < 4; i++) {
+                    for (let j = 0; j < 3; j++) {
+                        if (grid[i][j] !== 0 && grid[i][j] === grid[i][j+1]) {
+                            opportunities += Math.log2(grid[i][j]);
+                        }
+                    }
+                }
+                
+                // 纵向合并机会
+                for (let j = 0; j < 4; j++) {
+                    for (let i = 0; i < 3; i++) {
+                        if (grid[i][j] !== 0 && grid[i][j] === grid[i+1][j]) {
+                            opportunities += Math.log2(grid[i][j]);
+                        }
+                    }
+                }
+                
+                // 潜在合并机会（隔一个空格的相同数字）
+                for (let i = 0; i < 4; i++) {
+                    for (let j = 0; j < 2; j++) {
+                        if (grid[i][j] !== 0 && grid[i][j+1] === 0 && grid[i][j] === grid[i][j+2]) {
+                            opportunities += Math.log2(grid[i][j]) * 0.5;
+                        }
+                    }
+                }
+                
+                for (let j = 0; j < 4; j++) {
+                    for (let i = 0; i < 2; i++) {
+                        if (grid[i][j] !== 0 && grid[i+1][j] === 0 && grid[i][j] === grid[i+2][j]) {
+                            opportunities += Math.log2(grid[i][j]) * 0.5;
+                        }
+                    }
+                }
+                
+                return opportunities;
+            }
+
+            // 蛇形模式评估（最优排列应该是从大到小的蛇形）
+            function evaluateSnakePattern(grid) {
+                const patterns = [
+                    // 从左上角开始的蛇形模式
+                    [
+                        [15, 14, 13, 12],
+                        [8, 9, 10, 11],
+                        [7, 6, 5, 4],
+                        [0, 1, 2, 3]
+                    ],
+                    // 从右上角开始的蛇形模式
+                    [
+                        [12, 13, 14, 15],
+                        [11, 10, 9, 8],
+                        [4, 5, 6, 7],
+                        [3, 2, 1, 0]
+                    ]
+                ];
+                
+                // 缓存机制，避免重复计算
+                const gridKey = JSON.stringify(grid);
+                if (patternCache.has(gridKey)) {
+                    return patternCache.get(gridKey);
+                }
+                
+                let bestScore = -Infinity;
+                
+                for (const pattern of patterns) {
+                    let score = 0;
+                    let totalWeight = 0;
+                    
+                    // 获取非零值并排序
+                    const values = grid.flat().filter(v => v !== 0).sort((a, b) => b - a);
+                    
+                    // 模式权重总和
+                    for (let i = 0; i < 4; i++) {
+                        for (let j = 0; j < 4; j++) {
+                            totalWeight += pattern[i][j];
+                        }
+                    }
+                    
+                    // 计算贴合模式的程度
+                    for (let i = 0; i < 4; i++) {
+                        for (let j = 0; j < 4; j++) {
+                            if (grid[i][j] !== 0) {
+                                // 值越大应该对应权重越大的位置
+                                const valueRank = values.indexOf(grid[i][j]);
+                                const weightRank = pattern[i][j];
+                                
+                                // 计算该格子与理想位置的匹配度
+                                const match = (values.length - valueRank) * weightRank;
+                                score += match;
+                            }
+                        }
+                    }
+                    
+                    if (score > bestScore) {
+                        bestScore = score;
+                    }
+                }
+                
+                // 归一化分数
+                const normalizedScore = bestScore / 1000;
+                
+                // 缓存结果
+                patternCache.set(gridKey, normalizedScore);
+                
+                return normalizedScore;
+            }
+
+            // ...existing code for other evaluation functions...
 
             function countEmpty(grid) {
                 return grid.flat().filter(cell => cell === 0).length;
             }
 
             function getMaxTile(grid) {
-                return Math.log2(Math.max(...grid.flat().filter(cell => cell > 0)));
+                return Math.log2(Math.max(...grid.flat().filter(cell > 0)));
             }
 
             function calculateMonotonicity(grid) {
@@ -648,28 +981,147 @@
                 return smoothness;
             }
 
+            // 改进的角落奖励评估
             function cornerBonus(grid) {
                 let bonus = 0;
                 const corners = [[0,0], [0,3], [3,0], [3,3]];
                 
+                // 计算每个角落的价值
+                const cornerValues = corners.map(([i, j]) => grid[i][j]);
+                const maxCornerValue = Math.max(...cornerValues);
+                
+                // 找到最大值是否在角落
+                const maxVal = Math.max(...grid.flat());
+                const maxInCorner = cornerValues.includes(maxVal);
+                
+                // 对角落的块给予奖励，数值越大奖励越多
                 for (const [i, j] of corners) {
                     if (grid[i][j] !== 0) {
-                        bonus += Math.log2(grid[i][j]);
+                        bonus += Math.log2(grid[i][j]) * 2;
                     }
                 }
                 
-                // 特别奖励最大值在角落
-                const maxVal = Math.max(...grid.flat());
-                if (grid[0][0] === maxVal || grid[0][3] === maxVal || 
-                    grid[3][0] === maxVal || grid[3][3] === maxVal) {
-                    bonus += Math.log2(maxVal);
+                // 特别奖励：最大值在角落且周围格子形成递减序列
+                if (maxInCorner) {
+                    // 确定最大值在哪个角落
+                    const cornerIndex = cornerValues.indexOf(maxVal);
+                    const [ci, cj] = corners[cornerIndex];
+                    
+                    // 检查从角落出发的递减序列
+                    let sequenceBonus = 0;
+                    
+                    // 根据角落位置检查不同方向
+                    if (ci === 0 && cj === 0) { // 左上角
+                        if (grid[0][1] !== 0 && grid[0][1] <= grid[0][0] &&
+                            grid[1][0] !== 0 && grid[1][0] <= grid[0][0]) {
+                            sequenceBonus = Math.log2(grid[0][0]) * 3;
+                        }
+                    } else if (ci === 0 && cj === 3) { // 右上角
+                        if (grid[0][2] !== 0 && grid[0][2] <= grid[0][3] &&
+                            grid[1][3] !== 0 && grid[1][3] <= grid[0][3]) {
+                            sequenceBonus = Math.log2(grid[0][3]) * 3;
+                        }
+                    } else if (ci === 3 && cj === 0) { // 左下角
+                        if (grid[2][0] !== 0 && grid[2][0] <= grid[3][0] &&
+                            grid[3][1] !== 0 && grid[3][1] <= grid[3][0]) {
+                            sequenceBonus = Math.log2(grid[3][0]) * 3;
+                        }
+                    } else if (ci === 3 && cj === 3) { // 右下角
+                        if (grid[2][3] !== 0 && grid[2][3] <= grid[3][3] &&
+                            grid[3][2] !== 0 && grid[3][2] <= grid[3][3]) {
+                            sequenceBonus = Math.log2(grid[3][3]) * 3;
+                        }
+                    }
+                    
+                    bonus += sequenceBonus;
                 }
                 
                 return bonus;
             }
 
+            // ...existing code...
+            
+            // 添加基础消息处理器，确保Worker可以响应
+            self.onmessage = function(e) {
+                try {
+                    // 测试消息处理
+                    if (e.data.type === 'test') {
+                        self.postMessage({status: 'ok'});
+                        return;
+                    }
+                    
+                    // 正常算法处理
+                    processAIMove(e.data);
+                } catch (err) {
+                    console.error('Worker processing error:', err);
+                    self.postMessage({error: err.message});
+                }
+            };
+            
+            // 处理AI移动决策
+            function processAIMove(data) {
+                const { grid, depth, timeLimit, algorithm } = data;
+                const startTime = Date.now();
+                
+                let result;
+                
+                try {
+                    // 使用简单的启发式算法进行基础测试
+                    const bestDir = getBestDirection(grid);
+                    
+                    // 根据指定算法选择策略
+                    if (algorithm === 'expectimax') {
+                        // 运行ExpectiMax算法
+                        let currentDepth = 1;
+                        while (currentDepth <= depth && (Date.now() - startTime < timeLimit)) {
+                            const moveResult = expectiMaxWithTime(grid, currentDepth, startTime, timeLimit);
+                            if (moveResult) {
+                                result = moveResult;
+                            }
+                            currentDepth++;
+                        }
+                        result = result || { dir: bestDir };
+                    } 
+                    else if (algorithm === 'mcts') {
+                        // 运行MCTS
+                        const bestMove = runMCTS(grid, timeLimit);
+                        result = { dir: bestMove };
+                    }
+                    else if (algorithm === 'hybrid') {
+                        // 使用混合算法
+                        result = runHybridAlgorithm(grid, timeLimit);
+                    }
+                    else {
+                        // 默认情况下使用简单启发式
+                        result = { dir: bestDir };
+                    }
+                    
+                    // 确保结果有效
+                    if (!result || !result.dir) {
+                        result = { dir: bestDir };
+                    }
+                    
+                    self.postMessage(result);
+                } catch (e) {
+                    console.error('AI calculation error:', e);
+                    self.postMessage({ dir: getBestDirection(grid), error: e.message });
+                }
+            }
+
+            // 添加缺失的futurePotential函数
+            function futurePotential(grid) {
+                // 评估当前格局可能产生的未来移动空间
+                let potentialMoves = 0;
+                for (const direction of ['up', 'down', 'left', 'right']) {
+                    if (canMove(grid, direction)) {
+                        potentialMoves++;
+                    }
+                }
+                return potentialMoves;
+            }
+            
+            // 添加缺失的adjacencyPenalty函数
             function adjacencyPenalty(grid) {
-                // 相邻格子数值差距大时的惩罚
                 let penalty = 0;
                 for (let i = 0; i < 4; i++) {
                     for (let j = 0; j < 4; j++) {
@@ -683,25 +1135,23 @@
                         }
                     }
                 }
-                return -penalty; // 返回负值作为惩罚
+                return -penalty;
             }
-
+            
+            // 添加缺失的gradientScore函数
             function gradientScore(grid) {
-                // 设置期望的梯度模式（例如蛇形模式）
                 const patterns = [
-                    // 蛇形模式（向右增长，然后向左增长...）
-                    [
+                    [ // 蛇形模式
                         [15, 14, 13, 12],
                         [8, 9, 10, 11],
                         [7, 6, 5, 4],
                         [0, 1, 2, 3]
                     ],
-                    // 向右上角增长
-                    [
-                        [12, 13, 14, 15],
-                        [8, 9, 10, 11],
+                    [ // 向上增长模式
+                        [0, 1, 2, 3],
                         [4, 5, 6, 7],
-                        [0, 1, 2, 3]
+                        [8, 9, 10, 11],
+                        [12, 13, 14, 15]
                     ]
                 ];
                 
@@ -711,7 +1161,6 @@
                     for (let i = 0; i < 4; i++) {
                         for (let j = 0; j < 4; j++) {
                             if (grid[i][j] !== 0) {
-                                // 根据模式中的位置给予加权
                                 score += grid[i][j] * pattern[i][j];
                             }
                         }
@@ -720,16 +1169,123 @@
                 }
                 return maxScore / 1000;
             }
-
-            function futurePotential(grid) {
-                // 评估当前格局可能产生的未来移动空间
-                let potentialMoves = 0;
-                for (const direction of ['up', 'down', 'left', 'right']) {
-                    if (canMove(grid, direction)) {
-                        potentialMoves++;
+            
+            // 确保canMove函数存在且正确
+            function canMove(grid, direction) {
+                if (direction === 'up') {
+                    for (let j = 0; j < 4; j++) {
+                        for (let i = 1; i < 4; i++) {
+                            if (grid[i][j] !== 0 && 
+                                (grid[i-1][j] === 0 || grid[i-1][j] === grid[i][j])) {
+                                return true;
+                            }
+                        }
+                    }
+                } else if (direction === 'down') {
+                    for (let j = 0; j < 4; j++) {
+                        for (let i = 0; i < 3; i++) {
+                            if (grid[i][j] !== 0 && 
+                                (grid[i+1][j] === 0 || grid[i+1][j] === grid[i][j])) {
+                                return true;
+                            }
+                        }
+                    }
+                } else if (direction === 'left') {
+                    for (let i = 0; i < 4; i++) {
+                        for (let j = 1; j < 4; j++) {
+                            if (grid[i][j] !== 0 && 
+                                (grid[i][j-1] === 0 || grid[i][j-1] === grid[i][j])) {
+                                return true;
+                            }
+                        }
+                    }
+                } else if (direction === 'right') {
+                    for (let i = 0; i < 4; i++) {
+                        for (let j = 0; j < 3; j++) {
+                            if (grid[i][j] !== 0 && 
+                                (grid[i][j+1] === 0 || grid[i][j+1] === grid[i][j])) {
+                                return true;
+                            }
+                        }
                     }
                 }
-                return potentialMoves;
+                return false;
+            }
+            
+            // 确保simulateMove函数存在且正确
+            function simulateMove(grid, direction) {
+                const newGrid = JSON.parse(JSON.stringify(grid));
+                let moved = false;
+                let newScore = 0;
+                
+                if (direction === 'up' || direction === 'down') {
+                    const isUp = direction === 'up';
+                    for (let col = 0; col < 4; col++) {
+                        const column = [];
+                        for (let row = 0; row < 4; row++) {
+                            column.push(newGrid[row][col]);
+                        }
+                        
+                        const { newLine, lineMoved, lineScore } = mergeLine(column, isUp);
+                        
+                        moved = moved || lineMoved;
+                        newScore += lineScore;
+                        
+                        for (let row = 0; row < 4; row++) {
+                            newGrid[row][col] = newLine[row];
+                        }
+                    }
+                } else {
+                    const isLeft = direction === 'left';
+                    for (let row = 0; row < 4; row++) {
+                        const line = [...newGrid[row]];
+                        const { newLine, lineMoved, lineScore } = mergeLine(line, isLeft);
+                        
+                        moved = moved || lineMoved;
+                        newScore += lineScore;
+                        
+                        newGrid[row] = newLine;
+                    }
+                }
+                
+                return { newGrid, moved, newScore };
+            }
+            
+            // 确保mergeLine函数存在且正确
+            function mergeLine(line, isFirstDirection) {
+                const result = Array(4).fill(0);
+                let lineMoved = false;
+                let lineScore = 0;
+                let position = isFirstDirection ? 0 : 3;
+                
+                const numbers = line.filter(n => n !== 0);
+                if (isFirstDirection === false) numbers.reverse();
+                
+                for (let i = 0; i < numbers.length; i++) {
+                    if (i < numbers.length - 1 && numbers[i] === numbers[i + 1]) {
+                        const mergedValue = numbers[i] * 2;
+                        result[position] = mergedValue;
+                        position += isFirstDirection ? 1 : -1;
+                        lineScore += mergedValue;
+                        i++;
+                    } else {
+                        result[position] = numbers[i];
+                        position += isFirstDirection ? 1 : -1;
+                    }
+                }
+                
+                for (let i = 0; i < 4; i++) {
+                    if (result[i] !== line[i]) {
+                        lineMoved = true;
+                        break;
+                    }
+                }
+                
+                if (!isFirstDirection) {
+                    result.reverse();
+                }
+                
+                return { newLine: result, lineMoved, lineScore };
             }
         }
 
@@ -756,19 +1312,31 @@
         // 渲染游戏界面
         function render() {
             board.innerHTML = '';
-            tiles.forEach((row, i) => {
-                row.forEach((tile, j) => {
+            
+            // 首先渲染所有的单元格背景
+            for (let i = 0; i < 4; i++) {
+                for (let j = 0; j < 4; j++) {
+                    const cellDiv = document.createElement('div');
+                    cellDiv.className = 'cell';
+                    cellDiv.style.left = `${j * 26.5}%`;
+                    cellDiv.style.top = `${i * 26.5}%`;
+                    board.appendChild(cellDiv);
+                }
+            }
+            
+            // 然后渲染有值的方块
+            for (let i = 0; i < 4; i++) {
+                for (let j = 0; j < 4; j++) {
                     if (grid[i][j] !== 0) {
-                        const cellDiv = document.createElement('div');
-                        cellDiv.className = 'cell';
-                        cellDiv.style.left = `${j * 26.5}%`;
-                        cellDiv.style.top = `${i * 26.5}%`;
-                        
                         const tileDiv = document.createElement('div');
                         tileDiv.className = 'tile';
                         tileDiv.textContent = grid[i][j];
                         tileDiv.style.backgroundColor = getTileColor(grid[i][j]);
                         tileDiv.style.color = grid[i][j] > 4 ? '#f9f6f2' : '#776e65';
+                        tileDiv.style.left = `${j * 26.5}%`;
+                        tileDiv.style.top = `${i * 26.5}%`;
+                        tileDiv.style.width = '22.5%';
+                        tileDiv.style.height = '22.5%';
                         
                         if (animationQueue.find(a => a.type === 'new' && a.i === i && a.j === j)) {
                             tileDiv.classList.add('new-tile');
@@ -779,11 +1347,11 @@
                             setTimeout(() => tileDiv.classList.remove('merge'), 200);
                         }
                         
-                        cellDiv.appendChild(tileDiv);
-                        board.appendChild(cellDiv);
+                        board.appendChild(tileDiv);
                     }
-                });
-            });
+                }
+            }
+            
             animationQueue = [];
         }
 
@@ -798,54 +1366,122 @@
             return colors[value] || '#cdc1b4';
         }
 
-        // 智能自动游戏
+        // 智能自动游戏 - 简化并修复版本
         function autoPlay() {
             if (autoPlayInterval) {
                 clearInterval(autoPlayInterval);
                 autoPlayInterval = null;
                 autoPlayBtn.textContent = 'Start AI';
+                aiStatus.textContent = '';
+                return;
+            }
+            
+            // 检查Worker是否有效
+            if (!workerPool || workerPool.length === 0) {
+                aiStatus.textContent = 'AI处理器初始化失败，尝试重新启动游戏';
                 return;
             }
             
             const algorithm = document.getElementById('algorithmSelect').value;
             autoPlayBtn.textContent = 'Stop AI';
-            const baseDepth = 6;  // 基本深度
-            const timeLimit = algorithm === 'mcts' ? 200 : 50; // MCTS需要更多时间
+            aiStatus.innerHTML = `<span class="thinking">AI思考中...</span>`;
+            
+            // 简化逻辑，确保基本功能正常
+            const timeLimit = algorithm === 'expectimax' ? 150 : 
+                             (algorithm === 'mcts' ? 300 : 
+                             (algorithm === 'hybrid' ? 400 : 200));
+            
+            const interval = algorithm === 'expectimax' ? 200 : 
+                            (algorithm === 'mcts' ? 350 :
+                            (algorithm === 'hybrid' ? 450 : 250));
+            
+            let movesMade = 0;
+            let lastMoveTime = Date.now();
             
             autoPlayInterval = setInterval(() => {
+                const currentTime = Date.now();
+                const timeSinceLastMove = currentTime - lastMoveTime;
+                
+                // 定期更新状态显示，让用户知道AI仍在运行
+                if (timeSinceLastMove > 1000) {
+                    aiStatus.innerHTML = `<span class="thinking">AI思考中... ${Math.floor(timeSinceLastMove/1000)}秒</span>`;
+                }
+                
+                // 检查是否有可用Worker
                 const availableWorkers = workerPool.filter(w => !w.busy);
-                if (availableWorkers.length === 0) return;
+                if (availableWorkers.length === 0) {
+                    return;
+                }
 
                 const worker = availableWorkers[0];
                 worker.busy = true;
                 
                 worker.onmessage = (e) => {
                     worker.busy = false;
+                    lastMoveTime = Date.now();
+                    
+                    // 检查返回的数据
                     if (e.data && e.data.dir) {
+                        movesMade++;
+                        aiStatus.textContent = `AI已执行 ${movesMade} 步 (${algorithm})`;
                         handleMovement(e.data.dir);
+                    } else if (e.data && e.data.error) {
+                        aiStatus.textContent = `AI错误: ${e.data.error}`;
+                        console.error('AI error:', e.data.error);
+                    } else {
+                        aiStatus.textContent = `AI返回了无效数据`;
+                        console.error('Invalid data from AI:', e.data);
                     }
                 };
                 
-                // 动态计算深度：空格越少，深度越大
-                const emptyCells = grid.flat().filter(c => c === 0).length;
-                const depth = baseDepth + Math.floor((16 - emptyCells) / 4);
+                worker.onerror = (e) => {
+                    worker.busy = false;
+                    aiStatus.textContent = `AI错误: ${e.message}`;
+                    console.error('Worker error:', e);
+                };
                 
-                worker.postMessage({ 
-                    grid: JSON.parse(JSON.stringify(grid)), 
-                    depth: Math.min(depth, 10),  // 最大深度限制为10
-                    timeLimit,
-                    algorithm 
-                });
-            }, algorithm === 'mcts' ? 250 : 50); // MCTS需要更长的间隔
+                try {
+                    // 发送最简单的请求，确保基本功能工作
+                    worker.postMessage({ 
+                        grid: JSON.parse(JSON.stringify(grid)),
+                        depth: 6,
+                        timeLimit,
+                        algorithm
+                    });
+                } catch (e) {
+                    worker.busy = false;
+                    aiStatus.textContent = `AI通信错误: ${e.message}`;
+                    console.error('Worker communication error:', e);
+                }
+            }, interval);
         }
 
         // 处理移动操作
         function handleMovement(direction) {
+            const originalGrid = JSON.parse(JSON.stringify(grid)); // 保存移动前的状态
             const { newGrid, moved, newScore } = simulateMove(grid, direction);
+            
             if (moved) {
                 grid = newGrid;
                 score += newScore;
                 scoreDisplay.textContent = score;
+                
+                // 计算哪些方块发生了合并，并添加到动画队列
+                for (let i = 0; i < 4; i++) {
+                    for (let j = 0; j < 4; j++) {
+                        // 如果当前位置的值是原位置的2倍，表示发生合并
+                        if (grid[i][j] !== 0 && originalGrid[i][j] !== 0 && 
+                            grid[i][j] === originalGrid[i][j] * 2) {
+                            animationQueue.push({ 
+                                type: 'merge', 
+                                i: i, 
+                                j: j, 
+                                value: grid[i][j] 
+                            });
+                        }
+                    }
+                }
+                
                 addRandomTile();
                 render();
                 checkGameOver();
@@ -907,10 +1543,12 @@
                 if (i < numbers.length - 1 && numbers[i] === numbers[i + 1]) {
                     const mergedValue = numbers[i] * 2;
                     result[position] = mergedValue;
+                    const currentPosition = position; // 保存当前位置，用于动画
                     position += isFirstDirection ? 1 : -1;
                     lineScore += mergedValue;
                     i++; // 跳过下一个数字
-                    animationQueue.push({ type: 'merge', i: Math.floor(position/4), j: position%4, value: mergedValue });
+                    
+                    // 不要在这里添加动画队列项，而在handleMovement中添加
                 } else {
                     result[position] = numbers[i];
                     position += isFirstDirection ? 1 : -1;

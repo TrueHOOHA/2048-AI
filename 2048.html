@@ -233,26 +233,23 @@
 
                 const moves = ['up', 'down', 'left', 'right']
                     .filter(dir => canMove(grid, dir))
-                    .map(dir => ({ dir, grid: simulateMove(grid, dir).newGrid }));moved: simulateMove(grid, dir).moved }));
+                    .map(dir => ({ dir, grid: simulateMove(grid, dir).newGrid, moved: simulateMove(grid, dir).moved }));
 
                 if (moves.length === 0) return null;
 
-                for (const { dir, grid: newGrid } of moves) {{
-                    const score = evaluateGrid(newGrid);
-                    if (score > bestScore) {
+                for (const { dir, grid: newGrid } of moves) {
+                    let score;
+                    
+                    if (depth > 1) {
                         // 递归调用expectiMaxWithTime，进行更深层次的搜索
                         const nextMove = expectiMaxWithTime(newGrid, depth - 1, startTime, timeLimit);
-                        if (nextMove) {ove = expectiMaxWithTime(newGrid, depth - 1, startTime, timeLimit);
+                        if (nextMove) {
                             score = nextMove.score; // 使用下一层搜索的分数
-                                score = nextMove.score; // 使用下一层搜索的分数
-                            } else {
-                                score = evaluateGrid(newGrid); // 如果下一层搜索超时，则使用当前评估函数
-                            }
                         } else {
-                            score = evaluateGrid(newGrid); // 达到深度限制，使用评估函数
+                            score = evaluateGrid(newGrid); // 如果下一层搜索超时，则使用当前评估函数
                         }
                     } else {
-                        score = -Infinity; // 如果无法移动，则给出一个很低的分数
+                        score = evaluateGrid(newGrid); // 达到深度限制，使用评估函数
                     }
 
                     if (score > bestScore) {

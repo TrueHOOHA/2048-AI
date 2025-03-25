@@ -108,6 +108,10 @@
     <div class="score">Score: <span id="score">0</span></div>
     <div class="controls">
         <button id="autoPlayBtn">Start AI</button>
+        <select id="algorithmSelect">
+            <option value="expectimax">ExpectiMax</option>
+            <option value="mcts">MCTS</option>
+        </select>
         <button id="resetBtn">New Game</button>
     </div>
     <div class="container" id="container"></div>
@@ -200,22 +204,183 @@
                 return weights;
             }
 
-            self.addEventListener('message', async (e) => {
-                const { grid, depth, timeLimit } = e.data;
-                const startTime = Date.now();
-                // 使用迭代加深搜索
-                let result = null;
-                let currentDepth = 1;
-                
-                while (currentDepth <= depth && (Date.now() - startTime < (timeLimit || 45))) {
-                    const moveResult = expectiMaxWithTime(grid, currentDepth, startTime, timeLimit || 45);
-                    if (moveResult) {
-                        result = moveResult;
-                    }
-                    currentDepth++;
+            // MCTS节点类定义
+            class MCTSNode {
+                constructor(grid, parent = null, move = null) {
+                    this.grid = grid;
+                    this.parent = parent;
+                    this.move = move;
+                    this.visits = 0;
+                    this.score = 0;
+                    this.children = {};
+                    this.untriedMoves = this.getAvailableMoves();
+                    this.isTerminal = this.untriedMoves.length === 0;
                 }
                 
-                self.postMessage(result || {dir: getBestDirection(grid)});
+                getAvailableMoves() {
+                    return ['up', 'down', 'left', 'right'].filter(move => canMove(this.grid, move));
+                }
+                
+                // UCB1公式选择节点
+                selectChild() {
+                    const C = 1.414; // 探索常数
+                    let bestScore = -Infinity;
+                    let bestChild = null;
+                    
+                    for (const [move, child] of Object.entries(this.children)) {
+                        if (child.visits === 0) return child;
+                        
+                        // UCB1公式
+                        const exploitation = child.score / child.visits;
+                        const exploration = C * Math.sqrt(Math.log(this.visits) / child.visits);
+                        const score = exploitation + exploration;
+                        
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestChild = child;
+                        }
+                    }
+                    return bestChild;
+                }
+                
+                // 扩展节点
+                expand() {
+                    if (this.untriedMoves.length === 0) return null;
+                    
+                    const move = this.untriedMoves.pop();
+                    const { newGrid } = simulateMove(this.grid, move);
+                    
+                    // 随机添加一个2或4
+                    const newGridWithRandom = addRandomTileToGrid(newGrid);
+                    
+                    const child = new MCTSNode(newGridWithRandom, this, move);
+                    this.children[move] = child;
+                    return child;
+                }
+                
+                // 随机模拟
+                rollout() {
+                    let currentGrid = JSON.parse(JSON.stringify(this.grid));
+                    let depth = 0;
+                    let totalScore = 0;
+                    
+                    // 模拟一定步数或直到游戏结束
+                    while (depth < 20) {
+                        const availableMoves = ['up', 'down', 'left', 'right']
+                            .filter(move => canMove(currentGrid, move));
+                            
+                        if (availableMoves.length === 0) break;
+                        
+                        const randomMove = availableMoves[Math.floor(Math.random() * availableMoves.length)];
+                        const { newGrid, newScore } = simulateMove(currentGrid, randomMove);
+                        
+                        totalScore += newScore;
+                        currentGrid = addRandomTileToGrid(newGrid);
+                        depth++;
+                    }
+                    
+                    // 评估最终状态
+                    return totalScore + evaluateGrid(currentGrid) * 10;
+                }
+                
+                // 反向传播
+                backpropagate(score) {
+                    let node = this;
+                    while (node !== null) {
+                        node.visits += 1;
+                        node.score += score;
+                        node = node.parent;
+                    }
+                }
+                
+                // 获取最佳移动
+                getBestMove() {
+                    let bestScore = -Infinity;
+                    let bestMove = null;
+                    
+                    for (const [move, child] of Object.entries(this.children)) {
+                        const score = child.visits > 0 ? child.score / child.visits : 0;
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestMove = move;
+                        }
+                    }
+                    
+                    return bestMove;
+                }
+            }
+
+            // 添加随机方块到网格
+            function addRandomTileToGrid(grid) {
+                const newGrid = JSON.parse(JSON.stringify(grid));
+                const emptyCells = [];
+                newGrid.forEach((row, i) => {
+                    row.forEach((cell, j) => {
+                        if (cell === 0) emptyCells.push({ i, j });
+                    });
+                });
+                
+                if (emptyCells.length > 0) {
+                    const { i, j } = emptyCells[Math.floor(Math.random() * emptyCells.length)];
+                    newGrid[i][j] = Math.random() < 0.9 ? 2 : 4;
+                }
+                
+                return newGrid;
+            }
+
+            // MCTS主算法
+            function runMCTS(grid, timeLimit) {
+                const startTime = Date.now();
+                const rootNode = new MCTSNode(grid);
+                let iterations = 0;
+                
+                while (Date.now() - startTime < timeLimit) {
+                    // 1. 选择
+                    let node = rootNode;
+                    while (node.untriedMoves.length === 0 && Object.keys(node.children).length > 0) {
+                        node = node.selectChild();
+                    }
+                    
+                    // 2. 扩展
+                    if (node.untriedMoves.length > 0 && !node.isTerminal) {
+                        node = node.expand();
+                    }
+                    
+                    // 3. 模拟
+                    const score = node.rollout();
+                    
+                    // 4. 反向传播
+                    node.backpropagate(score);
+                    
+                    iterations++;
+                }
+                
+                return rootNode.getBestMove();
+            }
+
+            self.addEventListener('message', async (e) => {
+                const { grid, depth, timeLimit, algorithm } = e.data;
+                const startTime = Date.now();
+                
+                let result;
+                if (algorithm === 'mcts') {
+                    // 使用MCTS算法
+                    const bestMove = runMCTS(grid, timeLimit || 200);
+                    result = { dir: bestMove };
+                } else {
+                    // 使用现有的ExpectiMax算法
+                    let currentDepth = 1;
+                    while (currentDepth <= depth && (Date.now() - startTime < (timeLimit || 45))) {
+                        const moveResult = expectiMaxWithTime(grid, currentDepth, startTime, timeLimit || 45);
+                        if (moveResult) {
+                            result = moveResult;
+                        }
+                        currentDepth++;
+                    }
+                    result = result || { dir: getBestDirection(grid) };
+                }
+                
+                self.postMessage(result);
             });
 
             function expectiMaxWithTime(grid, depth, startTime, timeLimit) {
@@ -642,9 +807,10 @@
                 return;
             }
             
+            const algorithm = document.getElementById('algorithmSelect').value;
             autoPlayBtn.textContent = 'Stop AI';
             const baseDepth = 6;  // 基本深度
-            const timeLimit = 50; // 毫秒
+            const timeLimit = algorithm === 'mcts' ? 200 : 50; // MCTS需要更多时间
             
             autoPlayInterval = setInterval(() => {
                 const availableWorkers = workerPool.filter(w => !w.busy);
@@ -666,10 +832,11 @@
                 
                 worker.postMessage({ 
                     grid: JSON.parse(JSON.stringify(grid)), 
-                    depth: Math.min(depth, 10),  // 最大深度限制为 10
-                    timeLimit 
+                    depth: Math.min(depth, 10),  // 最大深度限制为10
+                    timeLimit,
+                    algorithm 
                 });
-            }, 50);
+            }, algorithm === 'mcts' ? 250 : 50); // MCTS需要更长的间隔
         }
 
         // 处理移动操作

@@ -80,42 +80,115 @@ class AI {
         }
     }
     
-    // 自适应算法选择
+    // 大幅优化的自适应算法选择
     chooseAdaptiveAlgorithm() {
         const grid = this.game.getGrid();
         const highestTile = this.getHighestTile(grid);
         const emptyTiles = this.game.getAvailablePositions(grid).length;
+        const currentScore = this.game.getScore();
         
-        // 优化的自适应策略:
-        // 1. 游戏早期：ExpectiMax - 快速决策和权重导向
-        // 2. 游戏中期：根据空格数量和最大方块权衡使用ExpectiMax或MCTS
-        // 3. 游戏后期（接近胜利）：使用混合算法全力推进
+        // 更智能的自适应策略，考虑更多因素:
+        // 1. 游戏阶段（早期/中期/后期/冲刺期）
+        // 2. 棋盘空间利用率
+        // 3. 当前模式形成情况
+        // 4. 历史性能表现
         
-        if (highestTile >= 1024) {
-            // 接近胜利条件，使用混合算法
-            return 'hybrid';
-        } else if (highestTile >= 512 || emptyTiles <= 5) {
-            // 达到中后期或空格少时使用MCTS进行更深入搜索
-            return 'mcts';
-        } else if (emptyTiles >= 12) {
-            // 游戏早期使用ExpectiMax快速决策
-            return 'expectimax';
-        } else {
-            // 中期阶段，基于当前局势平衡选择
-            const orderScore = this.evaluateBoardOrder(grid);
-            // 如果棋盘排列良好，用ExpectiMax加速；否则用MCTS深度探索
-            return orderScore > 0.7 ? 'expectimax' : 'mcts';
+        // 计算游戏阶段
+        const gamePhase = this.determineGamePhase(highestTile, emptyTiles, currentScore);
+        
+        // 评估当前棋盘组织程度
+        const boardOrganization = this.evaluateBoardOrganization(grid);
+        
+        // 根据阶段和组织程度选择算法
+        switch (gamePhase) {
+            case 'early':
+                // 早期游戏：快速建立基础结构
+                if (emptyTiles >= 10) {
+                    this.depth = Math.min(this.depth, 4); // 限制深度，提高速度
+                    return 'expectimax';
+                } else {
+                    this.depth = Math.min(this.depth, 5);
+                    return boardOrganization > 0.6 ? 'expectimax' : 'mcts';
+                }
+                
+            case 'mid':
+                // 中期游戏：平衡探索和利用
+                this.depth = Math.min(this.depth, 5);
+                if (boardOrganization > 0.7) {
+                    return 'expectimax'; // 结构良好时使用快速算法
+                } else if (emptyTiles <= 4) {
+                    return 'mcts'; // 空间紧张时需要深度搜索
+                } else {
+                    return 'hybrid'; // 一般情况使用混合算法
+                }
+                
+            case 'late':
+                // 后期游戏：追求最优解
+                this.depth = Math.max(this.depth, 5);
+                if (emptyTiles <= 3) {
+                    return 'mcts'; // 极度紧张，需要精确计算
+                } else if (this.isSnakePatternFormed(grid)) {
+                    return 'hybrid'; // 已形成蛇形，使用混合维持
+                } else {
+                    return 'mcts'; // 需要形成蛇形
+                }
+                
+            case 'endgame':
+                // 冲刺期：全力达成目标
+                this.depth = Math.max(this.depth, 6);
+                return 'hybrid'; // 使用最强算法
+                
+            default:
+                return 'expectimax';
         }
     }
     
-    // 新增: 评估棋盘排列的有序性
-    evaluateBoardOrder(grid) {
-        // 检测蛇形模式的完整度
-        const snakePatternScore = this.evaluateSnakePattern(grid);
-        // 检测角落策略的应用程度
-        const cornerStrategyScore = this.evaluateCornerStrategy(grid);
+    // 新增：确定游戏阶段
+    determineGamePhase(highestTile, emptyTiles, currentScore) {
+        // 根据最高方块值和分数判断游戏阶段
+        if (highestTile >= 1024) {
+            return 'endgame'; // 冲刺2048
+        } else if (highestTile >= 512 || currentScore >= 5000) {
+            return 'late'; // 后期
+        } else if (highestTile >= 128 || currentScore >= 1000 || emptyTiles <= 8) {
+            return 'mid'; // 中期
+        } else {
+            return 'early'; // 早期
+        }
+    }
+    
+    // 增强的棋盘组织程度评估
+    evaluateBoardOrganization(grid) {
+        // 综合多个指标评估棋盘的组织程度
         
-        return (snakePatternScore * 0.7 + cornerStrategyScore * 0.3);
+        // 1. 蛇形模式完成度
+        const snakeScore = this.evaluateSnakePattern(grid);
+        
+        // 2. 角落策略应用程度
+        const cornerScore = this.evaluateCornerStrategy(grid);
+        
+        // 3. 单调性评估
+        const monotonicity = this.evaluateMonotonicity(grid);
+        const normalizedMonotonicity = Math.min(1.0, monotonicity / 50);
+        
+        // 4. 高值方块聚集度
+        const clustering = this.evaluateHighValueClustering(grid);
+        const normalizedClustering = Math.min(1.0, clustering / 20);
+        
+        // 5. 边缘利用率
+        const edgeScore = this.evaluateEdgeStrategy(grid);
+        const normalizedEdgeScore = Math.min(1.0, Math.max(0, edgeScore) / 15);
+        
+        // 综合评分
+        const organization = (
+            snakeScore * 0.3 +
+            cornerScore * 0.25 +
+            normalizedMonotonicity * 0.2 +
+            normalizedClustering * 0.15 +
+            normalizedEdgeScore * 0.1
+        );
+        
+        return Math.min(1.0, Math.max(0.0, organization));
     }
     
     getAverageTime(algorithm) {
@@ -134,33 +207,55 @@ class AI {
         return names[algorithm] || algorithm;
     }
     
-    // =========== ExpectiMax 算法 - 优化版 ===========
+    // =========== ExpectiMax 算法 - 大幅优化版 ===========
     expectimaxDecision() {
         const grid = this.game.getGrid();
         let bestScore = -Infinity;
         let bestDirection = null;
         
-        // 尝试所有可能的移动方向，并应用方向偏好
+        // 预评估所有方向，用于更好的排序
+        const moveEvaluations = [];
+        
         for (let direction = 0; direction < 4; direction++) {
             const result = this.game.simulateMove(grid, direction);
             
             if (result.moved) {
-                // 应用方向偏好权重
-                const score = this.expectimax(result.grid, this.depth - 1, false) * 
-                              this.directionPreference[direction] + 
-                              result.score;
-                
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestDirection = direction;
-                }
+                // 快速预评估
+                const quickScore = this.quickEvaluate(result.grid) + result.score;
+                moveEvaluations.push({
+                    direction: direction,
+                    grid: result.grid,
+                    score: result.score,
+                    quickScore: quickScore
+                });
+            }
+        }
+        
+        // 按预评估分数排序，优先搜索更有希望的移动
+        moveEvaluations.sort((a, b) => b.quickScore - a.quickScore);
+        
+        // 搜索排序后的移动
+        for (const move of moveEvaluations) {
+            // 应用方向偏好权重和启发式加速
+            const score = this.expectimax(move.grid, this.depth - 1, false, -Infinity, Infinity) * 
+                          this.directionPreference[move.direction] + 
+                          move.score;
+            
+            if (score > bestScore) {
+                bestScore = score;
+                bestDirection = move.direction;
+            }
+            
+            // 如果发现非常好的移动，可以提前停止（在高深度时）
+            if (this.depth >= 6 && score > bestScore * 1.5) {
+                break;
             }
         }
         
         return bestDirection;
     }
     
-    expectimax(grid, depth, isMaxPlayer) {
+    expectimax(grid, depth, isMaxPlayer, alpha = -Infinity, beta = Infinity) {
         this.nodesEvaluated++;
         
         // 达到搜索深度或游戏结束时评估局面
@@ -169,7 +264,7 @@ class AI {
         }
         
         // 使用转置表查找是否已经评估过此局面
-        const gridKey = this.gridToString(grid) + (isMaxPlayer ? "m" : "c");
+        const gridKey = this.gridToString(grid) + (isMaxPlayer ? "m" : "c") + depth;
         if (this.transpositionTable.has(gridKey)) {
             return this.transpositionTable.get(gridKey);
         }
@@ -180,15 +275,20 @@ class AI {
             // 最大化玩家（AI）的回合
             let bestScore = -Infinity;
             
-            for (let direction = 0; direction < 4; direction++) {
-                const result = this.game.simulateMove(grid, direction);
+            // 获取并排序移动
+            const moves = this.getOrderedMoves(grid);
+            
+            for (const move of moves) {
+                const moveScore = this.expectimax(move.grid, depth - 1, false, alpha, beta) + move.score;
+                bestScore = Math.max(bestScore, moveScore);
                 
-                if (result.moved) {
-                    const moveScore = this.expectimax(result.grid, depth - 1, false) + result.score;
-                    bestScore = Math.max(bestScore, moveScore);
+                // Alpha-Beta 类似的剪枝（虽然ExpectiMax通常不用，但在这里可以提供一些加速）
+                alpha = Math.max(alpha, bestScore);
+                if (beta <= alpha && depth > 2) {
+                    break; // 剪枝
                 }
                 
-                // 如果已经找到非常好的移动，可以提前中断搜索（优化）
+                // 如果已经找到非常好的移动，可以提前中断搜索
                 if (bestScore > 100000 && depth > 3) break;
             }
             
@@ -201,20 +301,20 @@ class AI {
                 score = this.evaluateGrid(grid);
             } else {
                 let totalScore = 0;
-                // 使用启发式采样减少计算量
-                const sampleSize = depth <= 2 ? Math.min(3, availablePositions.length) : 1;
+                // 使用更智能的采样策略
+                const sampleSize = this.getSampleSize(depth, availablePositions.length);
                 const selectedPositions = this.selectPositionsForSampling(availablePositions, grid, sampleSize);
                 
                 for (const pos of selectedPositions) {
                     // 添加2的情况（概率90%）
                     const gridWith2 = JSON.parse(JSON.stringify(grid));
                     gridWith2[pos.x][pos.y] = 2;
-                    totalScore += 0.9 * this.expectimax(gridWith2, depth - 1, true);
+                    totalScore += 0.9 * this.expectimax(gridWith2, depth - 1, true, alpha, beta);
                     
                     // 添加4的情况（概率10%）
                     const gridWith4 = JSON.parse(JSON.stringify(grid));
                     gridWith4[pos.x][pos.y] = 4;
-                    totalScore += 0.1 * this.expectimax(gridWith4, depth - 1, true);
+                    totalScore += 0.1 * this.expectimax(gridWith4, depth - 1, true, alpha, beta);
                 }
                 
                 score = totalScore / selectedPositions.length;
@@ -224,6 +324,40 @@ class AI {
         // 存储到转置表
         this.transpositionTable.set(gridKey, score);
         return score;
+    }
+    
+    // 新增：获取排序后的移动
+    getOrderedMoves(grid) {
+        const moves = [];
+        
+        for (let direction = 0; direction < 4; direction++) {
+            const result = this.game.simulateMove(grid, direction);
+            
+            if (result.moved) {
+                const quickScore = this.quickEvaluate(result.grid);
+                moves.push({
+                    direction: direction,
+                    grid: result.grid,
+                    score: result.score,
+                    quickScore: quickScore
+                });
+            }
+        }
+        
+        // 按快速评估分数排序
+        moves.sort((a, b) => b.quickScore - a.quickScore);
+        return moves;
+    }
+    
+    // 新增：动态采样大小
+    getSampleSize(depth, availablePositions) {
+        if (depth <= 1) {
+            return Math.min(2, availablePositions);
+        } else if (depth <= 3) {
+            return Math.min(3, availablePositions);
+        } else {
+            return Math.min(4, availablePositions);
+        }
     }
     
     // 为期望节点选择有代表性的位置进行采样
@@ -266,60 +400,244 @@ class AI {
         return positionScores.slice(0, sampleSize).map(item => item.pos);
     }
     
-    // =========== MCTS 算法 - 优化版 ===========
+    // =========== MCTS 算法 - 大幅优化版 ===========
     mctsDecision() {
         const grid = this.game.getGrid();
-        // 大幅增加模拟次数以提高精确度
-        const simulations = Math.pow(2, this.depth) * 50;
+        // 动态调整模拟次数
+        const baseSimulations = Math.pow(2, this.depth) * 30;
+        const emptyTiles = this.game.getAvailablePositions(grid).length;
+        const adaptiveSimulations = baseSimulations * (emptyTiles < 4 ? 2 : 1); // 空间紧张时增加模拟
         
-        const stats = [0, 0, 0, 0]; // 统计四个方向的胜率
-        const moves = [0, 0, 0, 0]; // 统计四个方向的有效移动次数
+        const stats = [0, 0, 0, 0]; // 统计四个方向的总得分
+        const visits = [0, 0, 0, 0]; // 统计四个方向的访问次数
         const maxScores = [-Infinity, -Infinity, -Infinity, -Infinity]; // 每个方向的最大得分
+        const validMoves = [];
         
-        // 检查每个可能的移动
+        // 检查可行移动
         for (let direction = 0; direction < 4; direction++) {
+            const result = this.game.simulateMove(grid, direction);
+            if (result.moved) {
+                validMoves.push(direction);
+            }
+        }
+        
+        if (validMoves.length === 0) return null;
+        
+        // UCB1算法进行多臂赌博机选择
+        for (let simulation = 0; simulation < adaptiveSimulations; simulation++) {
+            this.nodesEvaluated++;
+            
+            // 选择要探索的方向（使用UCB1策略）
+            const direction = this.selectMoveUCB1(validMoves, stats, visits, simulation);
             const result = this.game.simulateMove(grid, direction);
             
             if (result.moved) {
-                moves[direction] = 1;
+                // 使用改进的rollout策略
+                const simulationResult = this.enhancedSimulatePlaythrough(result.grid, 150);
+                const finalScore = simulationResult.score + result.score;
                 
-                // 对每个可能的移动进行多次模拟
-                for (let i = 0; i < simulations / 4; i++) {
-                    this.nodesEvaluated++;
-                    // 增加最大移动次数，确保有足够机会达成高分
-                    const simulationResult = this.simulateRandomPlaythrough(result.grid, 200);
-                    stats[direction] += simulationResult.score;
+                stats[direction] += finalScore;
+                visits[direction]++;
+                
+                // 记录每个方向的最高得分
+                if (finalScore > maxScores[direction]) {
+                    maxScores[direction] = finalScore;
+                }
+            }
+        }
+        
+        // 使用改进的选择策略
+        return this.selectBestMoveFromStats(validMoves, stats, visits, maxScores);
+    }
+    
+    // 新增：UCB1选择策略
+    selectMoveUCB1(validMoves, stats, visits, totalSimulations) {
+        if (totalSimulations < validMoves.length * 10) {
+            // 初期确保每个移动都有足够的尝试
+            return validMoves[totalSimulations % validMoves.length];
+        }
+        
+        let bestUCB = -Infinity;
+        let bestMove = validMoves[0];
+        
+        for (const move of validMoves) {
+            if (visits[move] === 0) {
+                return move; // 优先探索未访问的移动
+            }
+            
+            const avgScore = stats[move] / visits[move];
+            const exploration = Math.sqrt(2 * Math.log(totalSimulations) / visits[move]);
+            const ucbValue = avgScore + exploration * 100; // 调整探索常数
+            
+            if (ucbValue > bestUCB) {
+                bestUCB = ucbValue;
+                bestMove = move;
+            }
+        }
+        
+        return bestMove;
+    }
+    
+    // 新增：改进的最佳移动选择
+    selectBestMoveFromStats(validMoves, stats, visits, maxScores) {
+        let bestMove = -1;
+        let bestValue = -Infinity;
+        
+        for (const move of validMoves) {
+            if (visits[move] > 0) {
+                const avgScore = stats[move] / visits[move];
+                const maxScore = maxScores[move];
+                const reliability = Math.min(1.0, visits[move] / 50); // 访问次数可靠性
+                
+                // 综合考虑平均分、最高分和可靠性
+                const combinedValue = avgScore * 0.5 + maxScore * 0.3 + reliability * avgScore * 0.2;
+                
+                if (combinedValue > bestValue) {
+                    bestValue = combinedValue;
+                    bestMove = move;
+                }
+            }
+        }
+        
+        return bestMove;
+    }
+    
+    // 增强的模拟游戏流程
+    enhancedSimulatePlaythrough(grid, maxMoves) {
+        let currentGrid = JSON.parse(JSON.stringify(grid));
+        let totalScore = 0;
+        let movesCount = 0;
+        let highestTile = this.getHighestTile(currentGrid);
+        const initialHighest = highestTile;
+        
+        // 使用更智能的移动策略
+        while (movesCount < maxMoves && this.hasAvailableMoves(currentGrid)) {
+            let direction;
+            
+            // 采用多阶段策略
+            if (movesCount < maxMoves * 0.7) {
+                // 前70%使用智能启发式
+                direction = this.selectInformedRandomMove(currentGrid);
+            } else {
+                // 后30%使用更保守的策略
+                direction = this.selectConservativeMove(currentGrid);
+            }
+            
+            if (direction !== -1) {
+                const result = this.game.simulateMove(currentGrid, direction);
+                
+                if (result.moved) {
+                    currentGrid = result.grid;
+                    totalScore += result.score;
+                    movesCount++;
                     
-                    // 记录每个方向的最高得分
-                    if (simulationResult.score > maxScores[direction]) {
-                        maxScores[direction] = simulationResult.score;
+                    // 大幅奖励生成高数字方块
+                    const newHighest = this.getHighestTile(currentGrid);
+                    if (newHighest > highestTile) {
+                        const improvement = newHighest / highestTile;
+                        totalScore += (newHighest - highestTile) * improvement * 2;
+                        highestTile = newHighest;
                     }
+                    
+                    // 随机添加一个新方块
+                    this.addRandomTileToGrid(currentGrid);
+                } else {
+                    break;
                 }
+            } else {
+                break;
             }
         }
         
-        // 如果没有可用的移动
-        if (moves.every(m => m === 0)) return null;
+        // 最终评估加成
+        const finalEvaluation = this.evaluateGrid(currentGrid);
+        const progressBonus = (highestTile / initialHighest - 1) * 1000;
         
-        // 计算每个方向的得分，现在同时考虑平均分和最高分
-        let bestDirection = -1;
-        let bestScore = -Infinity;
+        // 达成里程碑的特别奖励
+        let milestoneBonus = 0;
+        if (highestTile >= 2048) {
+            milestoneBonus = 200000;
+        } else if (highestTile >= 1024) {
+            milestoneBonus = 50000;
+        } else if (highestTile >= 512) {
+            milestoneBonus = 15000;
+        } else if (highestTile >= 256) {
+            milestoneBonus = 5000;
+        }
         
-        for (let i = 0; i < 4; i++) {
-            if (moves[i] > 0) {
-                // 计算平均分
-                const avgScore = stats[i] / (simulations / 4);
-                // 结合平均分和最高分，重点关注高潜力方向
-                const combinedScore = avgScore * 0.7 + maxScores[i] * 0.3;
+        return {
+            score: totalScore + finalEvaluation + progressBonus + milestoneBonus,
+            moves: movesCount,
+            grid: currentGrid,
+            highestTile: highestTile
+        };
+    }
+    
+    // 新增：智能的启发式移动选择
+    selectInformedRandomMove(grid) {
+        const moveScores = [];
+        
+        for (let dir = 0; dir < 4; dir++) {
+            const result = this.game.simulateMove(grid, dir);
+            if (result.moved) {
+                // 多因素评分
+                let score = result.score * 2; // 即时得分
+                score += this.quickEvaluate(result.grid); // 位置评估
                 
-                if (combinedScore > bestScore) {
-                    bestScore = combinedScore;
-                    bestDirection = i;
-                }
+                // 检查是否保持或改善蛇形模式
+                const snakeScore = this.evaluateSnakePattern(result.grid);
+                score += snakeScore * 200;
+                
+                // 检查角落策略
+                const cornerScore = this.evaluateCornerWeight(result.grid);
+                score += cornerScore * 100;
+                
+                moveScores.push({direction: dir, score: score});
             }
         }
         
-        return bestDirection;
+        if (moveScores.length === 0) return -1;
+        
+        // 90%选择最佳，10%探索其他选项
+        if (Math.random() < 0.9) {
+            moveScores.sort((a, b) => b.score - a.score);
+            return moveScores[0].direction;
+        } else {
+            return moveScores[Math.floor(Math.random() * moveScores.length)].direction;
+        }
+    }
+    
+    // 新增：保守策略移动选择
+    selectConservativeMove(grid) {
+        // 优先保持现有结构，避免破坏已形成的模式
+        const moves = [];
+        
+        for (let dir = 0; dir < 4; dir++) {
+            const result = this.game.simulateMove(grid, dir);
+            if (result.moved) {
+                // 评估移动后是否破坏现有模式
+                const beforeSnake = this.evaluateSnakePattern(grid);
+                const afterSnake = this.evaluateSnakePattern(result.grid);
+                const beforeCorner = this.evaluateCornerWeight(grid);
+                const afterCorner = this.evaluateCornerWeight(result.grid);
+                
+                // 计算模式保持度
+                const patternPreservation = (afterSnake / Math.max(beforeSnake, 0.1)) + 
+                                           (afterCorner / Math.max(beforeCorner, 0.1));
+                
+                moves.push({
+                    direction: dir,
+                    preservation: patternPreservation,
+                    score: result.score + this.quickEvaluate(result.grid)
+                });
+            }
+        }
+        
+        if (moves.length === 0) return -1;
+        
+        // 优先选择最能保持模式的移动
+        moves.sort((a, b) => (b.preservation * 0.7 + b.score * 0.3) - (a.preservation * 0.7 + a.score * 0.3));
+        return moves[0].direction;
     }
     
     simulateRandomPlaythrough(grid, maxMoves) {
@@ -425,37 +743,251 @@ class AI {
         return emptyCells * 10 + cornerScore;
     }
     
-    // =========== 混合算法 - 优化版 ===========
+    // =========== 混合算法 - 大幅增强版 ===========
     hybridDecision() {
         const grid = this.game.getGrid();
         const emptyTiles = this.game.getAvailablePositions(grid).length;
         const highestTile = this.getHighestTile(grid);
+        const currentScore = this.game.getScore();
+        const boardOrganization = this.evaluateBoardOrganization(grid);
         
-        // 高级混合策略:
-        // 1. 接近2048时，使用超深度MCTS特殊策略
-        // 2. 根据局面组织程度动态选择算法和参数
+        // 超智能混合策略:
+        // 1. 根据游戏状态动态选择主要算法
+        // 2. 使用多算法投票机制
+        // 3. 特殊情况下的专用策略
         
-        if (highestTile >= 1024) {
-            // 接近胜利，使用超强MCTS + 专注边角策略
-            const savedDepth = this.depth;
-            this.depth = Math.max(this.depth + 1, 6); // 临时增加深度
-            const extraFocus = this.mctsWithCornerFocus();
-            this.depth = savedDepth;
-            return extraFocus;
-        } else if (this.isSnakePatternFormed(grid)) {
-            // 如果已经形成了良好的蛇形模式，使用专门的维持策略
-            return this.maintainSnakePattern(grid);
-        } else if (emptyTiles >= 8) {
-            // 空格较多时使用改进的ExpectiMax
-            const savedDepth = this.depth;
-            this.depth = Math.min(this.depth + 1, 7); // 临时增加探索深度
-            const direction = this.expectimaxDecision();
-            this.depth = savedDepth;
-            return direction;
-        } else {
-            // 空格少时使用增强MCTS
-            return this.mctsDecision();
+        // 特殊情况处理
+        if (highestTile >= 1024 && emptyTiles <= 2) {
+            // 极端冲刺阶段：使用最精确的搜索
+            return this.preciseMCTSForEndgame(grid);
         }
+        
+        if (this.isNearGameOver(grid)) {
+            // 接近游戏结束：保守策略
+            return this.conservativeMove(grid);
+        }
+        
+        // 根据时间预算和局面复杂度选择策略
+        const timebudget = this.estimateTimebudget(emptyTiles, highestTile);
+        
+        if (timebudget === 'fast') {
+            // 快速决策：使用优化的ExpectiMax
+            return this.fastExpectimax(grid);
+        } else if (timebudget === 'medium') {
+            // 中等时间：使用算法投票
+            return this.algorithmVoting(grid);
+        } else {
+            // 充足时间：使用最强策略
+            return this.premiumHybridStrategy(grid);
+        }
+    }
+    
+    // 新增：时间预算估算
+    estimateTimebudget(emptyTiles, highestTile) {
+        // 根据局面复杂度估算可用计算时间
+        if (emptyTiles >= 8 && highestTile < 256) {
+            return 'fast'; // 早期局面，快速决策即可
+        } else if (emptyTiles >= 4 && highestTile < 512) {
+            return 'medium'; // 中期局面，中等计算
+        } else {
+            return 'full'; // 后期局面，需要深入计算
+        }
+    }
+    
+    // 新增：快速ExpectiMax
+    fastExpectimax(grid) {
+        const savedDepth = this.depth;
+        this.depth = Math.min(this.depth, 4); // 限制深度提高速度
+        const decision = this.expectimaxDecision();
+        this.depth = savedDepth;
+        return decision;
+    }
+    
+    // 新增：算法投票机制
+    algorithmVoting(grid) {
+        const votes = {};
+        const algorithms = ['expectimax', 'mcts'];
+        
+        // 每个算法投票
+        for (const algorithm of algorithms) {
+            let decision;
+            const savedDepth = this.depth;
+            
+            if (algorithm === 'expectimax') {
+                this.depth = Math.min(this.depth, 5);
+                decision = this.expectimaxDecision();
+            } else if (algorithm === 'mcts') {
+                // 使用较少模拟的MCTS
+                decision = this.lightweightMCTS(grid);
+            }
+            
+            this.depth = savedDepth;
+            
+            if (decision !== null) {
+                votes[decision] = (votes[decision] || 0) + 1;
+            }
+        }
+        
+        // 返回得票最多的方向
+        let maxVotes = 0;
+        let bestDirection = null;
+        
+        for (const [direction, voteCount] of Object.entries(votes)) {
+            if (voteCount > maxVotes) {
+                maxVotes = voteCount;
+                bestDirection = parseInt(direction);
+            }
+        }
+        
+        return bestDirection;
+    }
+    
+    // 新增：轻量级MCTS
+    lightweightMCTS(grid) {
+        const simulations = 200; // 减少模拟次数
+        const stats = [0, 0, 0, 0];
+        const visits = [0, 0, 0, 0];
+        
+        for (let direction = 0; direction < 4; direction++) {
+            const result = this.game.simulateMove(grid, direction);
+            
+            if (result.moved) {
+                for (let i = 0; i < simulations / 4; i++) {
+                    const simulationResult = this.simulateRandomPlaythrough(result.grid, 100);
+                    stats[direction] += simulationResult.score;
+                    visits[direction]++;
+                }
+            }
+        }
+        
+        let bestDirection = -1;
+        let bestScore = -Infinity;
+        
+        for (let i = 0; i < 4; i++) {
+            if (visits[i] > 0) {
+                const avgScore = stats[i] / visits[i];
+                if (avgScore > bestScore) {
+                    bestScore = avgScore;
+                    bestDirection = i;
+                }
+            }
+        }
+        
+        return bestDirection;
+    }
+    
+    // 新增：高级混合策略
+    premiumHybridStrategy(grid) {
+        const highestTile = this.getHighestTile(grid);
+        const emptyTiles = this.game.getAvailablePositions(grid).length;
+        const boardOrganization = this.evaluateBoardOrganization(grid);
+        
+        // 根据局面特征选择最适合的策略
+        if (boardOrganization > 0.8 && this.isSnakePatternFormed(grid)) {
+            // 蛇形模式已形成且组织良好：维持策略
+            return this.maintainSnakePattern(grid);
+        } else if (highestTile >= 512 && emptyTiles <= 6) {
+            // 高级阶段空间紧张：精确MCTS
+            return this.precisionMCTS(grid);
+        } else if (emptyTiles >= 10) {
+            // 空间充足：使用深度ExpectiMax快速建立结构
+            const savedDepth = this.depth;
+            this.depth = Math.min(this.depth + 1, 6);
+            const decision = this.expectimaxDecision();
+            this.depth = savedDepth;
+            return decision;
+        } else {
+            // 一般情况：混合使用两种算法
+            return this.dualAlgorithmHybrid(grid);
+        }
+    }
+    
+    // 新增：精密MCTS
+    precisionMCTS(grid) {
+        const savedDepth = this.depth;
+        this.depth = Math.max(this.depth, 6); // 增加深度
+        const decision = this.mctsDecision();
+        this.depth = savedDepth;
+        return decision;
+    }
+    
+    // 新增：双算法混合
+    dualAlgorithmHybrid(grid) {
+        // 同时运行ExpectiMax和MCTS，取结果一致或评估更高的
+        const expectimaxMove = this.expectimaxDecision();
+        const mctsMove = this.mctsDecision();
+        
+        if (expectimaxMove === mctsMove) {
+            // 两个算法一致，直接返回
+            return expectimaxMove;
+        } else {
+            // 不一致时，评估两个选择的质量
+            const expectimaxResult = this.game.simulateMove(grid, expectimaxMove);
+            const mctsResult = this.game.simulateMove(grid, mctsMove);
+            
+            let expectimaxScore = -Infinity;
+            let mctsScore = -Infinity;
+            
+            if (expectimaxResult.moved) {
+                expectimaxScore = this.evaluateGrid(expectimaxResult.grid) + expectimaxResult.score;
+            }
+            
+            if (mctsResult.moved) {
+                mctsScore = this.evaluateGrid(mctsResult.grid) + mctsResult.score;
+            }
+            
+            return expectimaxScore >= mctsScore ? expectimaxMove : mctsMove;
+        }
+    }
+    
+    // 新增：检查是否接近游戏结束
+    isNearGameOver(grid) {
+        const emptyTiles = this.game.getAvailablePositions(grid).length;
+        return emptyTiles <= 2;
+    }
+    
+    // 新增：保守移动策略
+    conservativeMove(grid) {
+        // 在接近游戏结束时，优先选择能保持空格或产生合并的移动
+        let bestMove = -1;
+        let bestScore = -Infinity;
+        
+        for (let direction = 0; direction < 4; direction++) {
+            const result = this.game.simulateMove(grid, direction);
+            
+            if (result.moved) {
+                let score = result.score * 3; // 重视即时得分
+                
+                // 重视产生的空格数量
+                const newEmptyTiles = this.game.getAvailablePositions(result.grid).length;
+                score += newEmptyTiles * 200;
+                
+                // 重视合并机会
+                const mergeOpportunities = this.evaluateMergeOpportunities(result.grid);
+                score += mergeOpportunities * 100;
+                
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMove = direction;
+                }
+            }
+        }
+        
+        return bestMove;
+    }
+    
+    // 新增：冲刺阶段精确MCTS
+    preciseMCTSForEndgame(grid) {
+        // 极端情况下的超精确搜索
+        const savedDepth = this.depth;
+        this.depth = Math.max(this.depth + 2, 8); // 大幅增加深度
+        
+        // 使用更多模拟次数
+        const grid_copy = JSON.parse(JSON.stringify(grid));
+        const decision = this.mctsDecision();
+        
+        this.depth = savedDepth;
+        return decision;
     }
     
     // 专注于边角策略的MCTS
@@ -641,58 +1173,174 @@ class AI {
         return score > 0.7; // 70%以上的匹配度视为已形成蛇形模式
     }
     
-    // 评估蛇形模式的匹配度
+    // 大幅增强的蛇形模式评估
     evaluateSnakePattern(grid) {
-        // 蛇形模式：大数字在左上角，呈Z字形或螺旋形排列
-        // 理想排列：16-8-4-2
-        //           32-64-128-1
-        //           1024-512-256-2
-        //           2048-1-1-4
+        // 多种蛇形模式检测，包括左上、右上、左下、右下起始的蛇形
+        const patterns = [
+            this.evaluateSnakeFromCorner(grid, {x: 0, y: 0}), // 左上角开始
+            this.evaluateSnakeFromCorner(grid, {x: 0, y: 3}), // 左下角开始
+            this.evaluateSnakeFromCorner(grid, {x: 3, y: 0}), // 右上角开始
+            this.evaluateSnakeFromCorner(grid, {x: 3, y: 3})  // 右下角开始
+        ];
         
+        // 返回最佳蛇形模式得分
+        const bestPattern = Math.max(...patterns);
+        
+        // 额外检查螺旋模式
+        const spiralScore = this.evaluateSpiralPattern(grid);
+        
+        return Math.max(bestPattern, spiralScore * 0.8); // 螺旋模式权重稍低
+    }
+    
+    // 新增：从指定角落评估蛇形模式
+    evaluateSnakeFromCorner(grid, startCorner) {
         let score = 0;
-        let total = 0;
+        let pathValues = [];
         
-        // 检查非零元素的顺序是否符合蛇形
-        const nonZeroValues = [];
-        for (let y = 0; y < 4; y++) {
-            for (let x = 0; x < 4; x++) {
-                if (grid[x][y] > 0) {
-                    nonZeroValues.push(grid[x][y]);
+        // 根据起始角落确定蛇形路径
+        const path = this.generateSnakePath(startCorner);
+        
+        // 提取路径上的所有非零值
+        for (const pos of path) {
+            if (grid[pos.x][pos.y] > 0) {
+                pathValues.push(grid[pos.x][pos.y]);
+            }
+        }
+        
+        if (pathValues.length < 2) return 0;
+        
+        // 检查递减趋势
+        let decreasingSequence = 0;
+        let maxSequence = 0;
+        
+        for (let i = 0; i < pathValues.length - 1; i++) {
+            if (pathValues[i] >= pathValues[i + 1]) {
+                decreasingSequence++;
+                maxSequence = Math.max(maxSequence, decreasingSequence);
+            } else {
+                decreasingSequence = 0;
+            }
+        }
+        
+        // 基础得分：最长递减序列
+        score += maxSequence * 0.15;
+        
+        // 检查2的幂次关系
+        let powerRelations = 0;
+        for (let i = 0; i < pathValues.length - 1; i++) {
+            const ratio = pathValues[i] / pathValues[i + 1];
+            if (ratio === 2) {
+                powerRelations++;
+                score += 0.1;
+            } else if (ratio === 4) {
+                powerRelations++;
+                score += 0.05;
+            }
+        }
+        
+        // 奖励更长的整体模式
+        if (pathValues.length >= 8) {
+            score += 0.1;
+        }
+        
+        // 检查最大值是否在起始角落
+        const maxTile = this.getHighestTile(grid);
+        if (grid[startCorner.x][startCorner.y] === maxTile) {
+            score += 0.2;
+        }
+        
+        return score;
+    }
+    
+    // 新增：生成蛇形路径
+    generateSnakePath(startCorner) {
+        const path = [];
+        
+        if (startCorner.x === 0 && startCorner.y === 0) {
+            // 左上角开始的Z字形
+            for (let y = 0; y < 4; y++) {
+                if (y % 2 === 0) {
+                    for (let x = 0; x < 4; x++) path.push({x, y});
+                } else {
+                    for (let x = 3; x >= 0; x--) path.push({x, y});
+                }
+            }
+        } else if (startCorner.x === 0 && startCorner.y === 3) {
+            // 左下角开始的Z字形
+            for (let y = 3; y >= 0; y--) {
+                if ((3 - y) % 2 === 0) {
+                    for (let x = 0; x < 4; x++) path.push({x, y});
+                } else {
+                    for (let x = 3; x >= 0; x--) path.push({x, y});
+                }
+            }
+        } else if (startCorner.x === 3 && startCorner.y === 0) {
+            // 右上角开始的Z字形
+            for (let y = 0; y < 4; y++) {
+                if (y % 2 === 0) {
+                    for (let x = 3; x >= 0; x--) path.push({x, y});
+                } else {
+                    for (let x = 0; x < 4; x++) path.push({x, y});
+                }
+            }
+        } else {
+            // 右下角开始的Z字形
+            for (let y = 3; y >= 0; y--) {
+                if ((3 - y) % 2 === 0) {
+                    for (let x = 3; x >= 0; x--) path.push({x, y});
+                } else {
+                    for (let x = 0; x < 4; x++) path.push({x, y});
                 }
             }
         }
         
-        // 排序并检查顺序
-        const sortedValues = [...nonZeroValues].sort((a, b) => b - a);
-        
-        // 定义理想的蛇形路径坐标
-        const snakePath = [
-            {x:0, y:0}, {x:1, y:0}, {x:2, y:0}, {x:3, y:0},
-            {x:3, y:1}, {x:2, y:1}, {x:1, y:1}, {x:0, y:1},
-            {x:0, y:2}, {x:1, y:2}, {x:2, y:2}, {x:3, y:2},
-            {x:3, y:3}, {x:2, y:3}, {x:1, y:3}, {x:0, y:3}
+        return path;
+    }
+    
+    // 新增：评估螺旋模式
+    evaluateSpiralPattern(grid) {
+        // 从外向内的螺旋路径
+        const spiralPath = [
+            {x:0,y:0}, {x:1,y:0}, {x:2,y:0}, {x:3,y:0},
+            {x:3,y:1}, {x:3,y:2}, {x:3,y:3},
+            {x:2,y:3}, {x:1,y:3}, {x:0,y:3},
+            {x:0,y:2}, {x:0,y:1},
+            {x:1,y:1}, {x:2,y:1}, {x:2,y:2}, {x:1,y:2}
         ];
         
-        // 检查最大的几个数字是否按蛇形排列
-        let valueIndex = 0;
-        let matchCount = 0;
+        let spiralScore = 0;
+        let pathValues = [];
         
-        for (const pos of snakePath) {
-            if (valueIndex >= sortedValues.length) break;
-            
-            if (grid[pos.x][pos.y] === sortedValues[valueIndex]) {
-                matchCount++;
-                valueIndex++;
+        for (const pos of spiralPath) {
+            if (grid[pos.x][pos.y] > 0) {
+                pathValues.push(grid[pos.x][pos.y]);
             }
         }
         
-        // 计算匹配分数
-        const matchScore = nonZeroValues.length > 0 ? matchCount / Math.min(8, nonZeroValues.length) : 0;
+        if (pathValues.length < 3) return 0;
         
-        // 单调性匹配度
-        const monotonicity = this.evaluateMonotonicity(grid);
+        // 检查螺旋模式的递减趋势
+        let decreasingCount = 0;
+        for (let i = 0; i < pathValues.length - 1; i++) {
+            if (pathValues[i] >= pathValues[i + 1]) {
+                decreasingCount++;
+            }
+        }
         
-        return (matchScore * 0.6 + monotonicity / 40 * 0.4);
+        spiralScore = decreasingCount / (pathValues.length - 1);
+        
+        // 检查外圈是否有最大值
+        const maxTile = this.getHighestTile(grid);
+        const outerRing = [{x:0,y:0}, {x:1,y:0}, {x:2,y:0}, {x:3,y:0}, {x:3,y:1}, {x:3,y:2}, {x:3,y:3}, {x:2,y:3}, {x:1,y:3}, {x:0,y:3}, {x:0,y:2}, {x:0,y:1}];
+        
+        for (const pos of outerRing) {
+            if (grid[pos.x][pos.y] === maxTile) {
+                spiralScore += 0.2;
+                break;
+            }
+        }
+        
+        return spiralScore;
     }
     
     // 获取最佳维持蛇形模式的移动
@@ -845,37 +1493,61 @@ class AI {
     }
     
     evaluateGrid(grid) {
-        // 多因素评估函数 - 优化权重
+        // 多因素评估函数 - 大幅优化权重和新增评估项
         let score = 0;
-        
-        // 1. 评估空格数量
+        const highestTile = this.getHighestTile(grid);
         const emptyTiles = this.game.getAvailablePositions(grid).length;
-        score += emptyTiles * 20; // 增加空格权重
         
-        // 2. 评估大数字位于角落的权重
+        // 1. 评估空格数量 - 动态权重
+        const emptyWeight = emptyTiles < 4 ? 50 : 25; // 空格稀少时权重更高
+        score += emptyTiles * emptyWeight;
+        
+        // 2. 评估大数字位于角落的权重 - 增强角落策略
         const cornerWeight = this.evaluateCornerWeight(grid);
-        score += cornerWeight * 60; // 增加角落策略权重
+        score += cornerWeight * 100; // 大幅增加角落策略权重
         
-        // 3. 评估单调性（方块有序排列）
+        // 3. 评估单调性（方块有序排列）- 动态权重
         const monotonicity = this.evaluateMonotonicity(grid);
-        score += monotonicity * 60; // 增加单调性权重
+        const monotonicityWeight = highestTile >= 512 ? 80 : 60;
+        score += monotonicity * monotonicityWeight;
         
         // 4. 评估相邻方块的平滑性
         const smoothness = this.evaluateSmoothness(grid);
-        score += smoothness * 40; // 增加平滑性权重
+        score += smoothness * 50; // 增加平滑性权重
         
-        // 5. 评估蛇形模式
-        if (this.getHighestTile(grid) >= 256) {
+        // 5. 评估蛇形模式 - 更早触发和更高权重
+        if (highestTile >= 128) {
             const snakeScore = this.evaluateSnakePattern(grid);
-            score += snakeScore * 1000; // 大幅增加蛇形模式权重
+            const snakeWeight = highestTile >= 512 ? 1500 : 1200;
+            score += snakeScore * snakeWeight;
         }
         
-        // 6. 评估最大方块的值
-        score += this.getHighestTile(grid) * 4;
+        // 6. 评估最大方块的值 - 指数增长奖励
+        score += Math.log2(highestTile + 1) * highestTile * 0.5;
         
         // 7. 评估合并机会
         const mergeOpportunities = this.evaluateMergeOpportunities(grid);
-        score += mergeOpportunities * 30;
+        score += mergeOpportunities * 40;
+        
+        // 8. 新增：评估边缘位置策略
+        const edgeStrategy = this.evaluateEdgeStrategy(grid);
+        score += edgeStrategy * 30;
+        
+        // 9. 新增：评估高值方块聚集度
+        const clustering = this.evaluateHighValueClustering(grid);
+        score += clustering * 80;
+        
+        // 10. 新增：惩罚散布的高值方块
+        const scatterPenalty = this.evaluateScatterPenalty(grid);
+        score -= scatterPenalty * 60;
+        
+        // 11. 新增：评估潜在合并价值
+        const potentialMerges = this.evaluatePotentialMerges(grid);
+        score += potentialMerges * 25;
+        
+        // 12. 新增：动态深度奖励（鼓励形成更深的序列）
+        const depthBonus = this.evaluateDepthBonus(grid);
+        score += depthBonus * 20;
         
         return score;
     }
@@ -906,29 +1578,114 @@ class AI {
     }
     
     evaluateCornerWeight(grid) {
-        // 检查大数字是否在角落
+        // 增强的角落策略评估
         const corners = [
             {x: 0, y: 0}, 
-            {x: 0, y: this.game.size - 1},
-            {x: this.game.size - 1, y: 0},
-            {x: this.game.size - 1, y: this.game.size - 1}
+            {x: 0, y: 3},
+            {x: 3, y: 0},
+            {x: 3, y: 3}
         ];
         
         let cornerScore = 0;
-        let maxTile = this.getHighestTile(grid);
+        const maxTile = this.getHighestTile(grid);
+        const secondMaxTile = this.getSecondHighestTile(grid);
         
+        // 为每个角落评分
         for (const corner of corners) {
-            // 如果最大方块在角落，加分
-            if (grid[corner.x][corner.y] === maxTile) {
-                cornerScore += 1.0;
+            const cornerValue = grid[corner.x][corner.y];
+            
+            // 最大方块在角落得分最高
+            if (cornerValue === maxTile) {
+                cornerScore += 2.0;
+                
+                // 检查该角落是否有良好的支撑结构
+                const supportScore = this.evaluateCornerSupport(grid, corner, maxTile);
+                cornerScore += supportScore;
             } 
-            // 如果较大方块在角落，也加分但权重较低
-            else if (grid[corner.x][corner.y] > maxTile / 2) {
-                cornerScore += 0.5;
+            // 次大方块在角落也有较高得分
+            else if (cornerValue === secondMaxTile) {
+                cornerScore += 1.2;
+            }
+            // 较大方块（超过最大值的1/4）在角落也加分
+            else if (cornerValue > maxTile / 4 && cornerValue > 0) {
+                cornerScore += 0.6;
+            }
+            
+            // 空角落略微减分（应该被利用）
+            if (cornerValue === 0) {
+                cornerScore -= 0.1;
             }
         }
         
+        // 检查是否有多个角落同时被大数字占据（通常不利）
+        let occupiedCorners = 0;
+        for (const corner of corners) {
+            if (grid[corner.x][corner.y] >= maxTile / 2) {
+                occupiedCorners++;
+            }
+        }
+        
+        // 超过一个角落被大数字占据时，略微减分
+        if (occupiedCorners > 1) {
+            cornerScore -= (occupiedCorners - 1) * 0.3;
+        }
+        
         return cornerScore;
+    }
+    
+    // 新增：获取第二大数字
+    getSecondHighestTile(grid) {
+        let highest = 0;
+        let secondHighest = 0;
+        
+        for (let x = 0; x < 4; x++) {
+            for (let y = 0; y < 4; y++) {
+                if (grid[x][y] > highest) {
+                    secondHighest = highest;
+                    highest = grid[x][y];
+                } else if (grid[x][y] > secondHighest && grid[x][y] < highest) {
+                    secondHighest = grid[x][y];
+                }
+            }
+        }
+        
+        return secondHighest;
+    }
+    
+    // 新增：评估角落支撑结构
+    evaluateCornerSupport(grid, corner, maxTile) {
+        let supportScore = 0;
+        
+        // 检查角落周围的支撑方块
+        const adjacentPositions = [
+            {x: corner.x + (corner.x === 0 ? 1 : -1), y: corner.y},
+            {x: corner.x, y: corner.y + (corner.y === 0 ? 1 : -1)}
+        ];
+        
+        for (const pos of adjacentPositions) {
+            if (pos.x >= 0 && pos.x < 4 && pos.y >= 0 && pos.y < 4) {
+                const adjValue = grid[pos.x][pos.y];
+                
+                // 邻接位置有较大数字时加分
+                if (adjValue >= maxTile / 2) {
+                    supportScore += 0.5;
+                } else if (adjValue >= maxTile / 4) {
+                    supportScore += 0.3;
+                }
+                
+                // 检查是否形成递减序列
+                if (adjValue > 0 && adjValue <= maxTile) {
+                    const ratio = maxTile / adjValue;
+                    if (ratio === 2) {
+                        supportScore += 0.4; // 形成2倍关系时额外加分
+                    } else if (ratio === 4) {
+                        supportScore += 0.2; // 形成4倍关系时适度加分
+                    }
+                }
+            }
+        }
+        
+        return supportScore;
     }
     
     evaluateMonotonicity(grid) {
@@ -1001,5 +1758,178 @@ class AI {
         }
         
         return smoothness;
+    }
+    
+    // 新增：评估边缘位置策略
+    evaluateEdgeStrategy(grid) {
+        let edgeScore = 0;
+        const maxTile = this.getHighestTile(grid);
+        
+        // 检查边缘位置（非角落）的大数字分布
+        for (let x = 0; x < 4; x++) {
+            for (let y = 0; y < 4; y++) {
+                const value = grid[x][y];
+                if (value >= maxTile / 4) { // 关注较大的数字
+                    // 边缘位置加分
+                    if (x === 0 || x === 3 || y === 0 || y === 3) {
+                        edgeScore += Math.log2(value + 1);
+                    }
+                    // 中心位置减分
+                    if (x >= 1 && x <= 2 && y >= 1 && y <= 2) {
+                        edgeScore -= Math.log2(value + 1) * 0.5;
+                    }
+                }
+            }
+        }
+        
+        return edgeScore;
+    }
+    
+    // 新增：评估高值方块聚集度
+    evaluateHighValueClustering(grid) {
+        let clusterScore = 0;
+        const maxTile = this.getHighestTile(grid);
+        const threshold = Math.max(32, maxTile / 8); // 动态阈值
+        
+        for (let x = 0; x < 4; x++) {
+            for (let y = 0; y < 4; y++) {
+                if (grid[x][y] >= threshold) {
+                    // 检查周围的高值方块
+                    let neighbors = 0;
+                    let neighborSum = 0;
+                    
+                    const directions = [{x: 1, y: 0}, {x: -1, y: 0}, {x: 0, y: 1}, {x: 0, y: -1}];
+                    
+                    for (const dir of directions) {
+                        const nx = x + dir.x;
+                        const ny = y + dir.y;
+                        
+                        if (nx >= 0 && nx < 4 && ny >= 0 && ny < 4) {
+                            if (grid[nx][ny] >= threshold) {
+                                neighbors++;
+                                neighborSum += Math.log2(grid[nx][ny] + 1);
+                            }
+                        }
+                    }
+                    
+                    // 高值方块周围有其他高值方块时加分
+                    if (neighbors > 0) {
+                        clusterScore += neighbors * Math.log2(grid[x][y] + 1) + neighborSum * 0.3;
+                    }
+                }
+            }
+        }
+        
+        return clusterScore;
+    }
+    
+    // 新增：评估散布惩罚
+    evaluateScatterPenalty(grid) {
+        let scatterPenalty = 0;
+        const maxTile = this.getHighestTile(grid);
+        const highValueThreshold = Math.max(64, maxTile / 4);
+        
+        // 找出所有高值方块的位置
+        const highValuePositions = [];
+        for (let x = 0; x < 4; x++) {
+            for (let y = 0; y < 4; y++) {
+                if (grid[x][y] >= highValueThreshold) {
+                    highValuePositions.push({x, y, value: grid[x][y]});
+                }
+            }
+        }
+        
+        // 计算高值方块之间的距离，距离越远惩罚越大
+        for (let i = 0; i < highValuePositions.length; i++) {
+            for (let j = i + 1; j < highValuePositions.length; j++) {
+                const pos1 = highValuePositions[i];
+                const pos2 = highValuePositions[j];
+                const distance = Math.abs(pos1.x - pos2.x) + Math.abs(pos1.y - pos2.y);
+                
+                // 同等级的方块距离远时惩罚更重
+                if (pos1.value === pos2.value && distance > 2) {
+                    scatterPenalty += Math.log2(pos1.value + 1) * distance;
+                }
+            }
+        }
+        
+        return scatterPenalty;
+    }
+    
+    // 新增：评估潜在合并价值
+    evaluatePotentialMerges(grid) {
+        let potentialScore = 0;
+        
+        // 检查不直接相邻但可能通过移动合并的方块
+        for (let direction = 0; direction < 4; direction++) {
+            const simResult = this.game.simulateMove(grid, direction);
+            if (simResult.moved) {
+                // 模拟移动后再检查直接合并机会
+                const directMerges = this.evaluateMergeOpportunities(simResult.grid);
+                potentialScore += directMerges * 0.7; // 给潜在合并较低权重
+            }
+        }
+        
+        // 检查形成连续序列的潜力
+        for (let x = 0; x < 4; x++) {
+            for (let y = 0; y < 3; y++) {
+                if (grid[x][y] > 0 && grid[x][y+1] > 0) {
+                    // 检查是否可能形成2的幂次序列
+                    const ratio = Math.max(grid[x][y], grid[x][y+1]) / Math.min(grid[x][y], grid[x][y+1]);
+                    if (ratio === 2) {
+                        potentialScore += Math.log2(Math.min(grid[x][y], grid[x][y+1]) + 1);
+                    }
+                }
+            }
+        }
+        
+        for (let y = 0; y < 4; y++) {
+            for (let x = 0; x < 3; x++) {
+                if (grid[x][y] > 0 && grid[x+1][y] > 0) {
+                    const ratio = Math.max(grid[x][y], grid[x+1][y]) / Math.min(grid[x][y], grid[x+1][y]);
+                    if (ratio === 2) {
+                        potentialScore += Math.log2(Math.min(grid[x][y], grid[x+1][y]) + 1);
+                    }
+                }
+            }
+        }
+        
+        return potentialScore;
+    }
+    
+    // 新增：评估深度奖励
+    evaluateDepthBonus(grid) {
+        let depthBonus = 0;
+        
+        // 检查每行和每列的最长递减序列
+        for (let i = 0; i < 4; i++) {
+            // 检查行
+            let rowSequence = 0;
+            let maxRowSequence = 0;
+            for (let j = 0; j < 3; j++) {
+                if (grid[i][j] > 0 && grid[i][j+1] > 0 && grid[i][j] >= grid[i][j+1]) {
+                    rowSequence++;
+                    maxRowSequence = Math.max(maxRowSequence, rowSequence);
+                } else {
+                    rowSequence = 0;
+                }
+            }
+            depthBonus += maxRowSequence * maxRowSequence; // 序列长度的平方奖励
+            
+            // 检查列
+            let colSequence = 0;
+            let maxColSequence = 0;
+            for (let j = 0; j < 3; j++) {
+                if (grid[j][i] > 0 && grid[j+1][i] > 0 && grid[j][i] >= grid[j+1][i]) {
+                    colSequence++;
+                    maxColSequence = Math.max(maxColSequence, colSequence);
+                } else {
+                    colSequence = 0;
+                }
+            }
+            depthBonus += maxColSequence * maxColSequence;
+        }
+        
+        return depthBonus;
     }
 }

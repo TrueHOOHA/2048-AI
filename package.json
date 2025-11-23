@@ -1,0 +1,17 @@
+{
+  "name": "2048-ai-game",
+  "version": "1.0.0",
+  "description": "A 2048 game with AI algorithms including Expectimax, MCTS and hybrid approaches",
+  "main": "src/main.js",
+  "type": "module",
+  "scripts": {
+    "start": "npx http-server -o",
+    "dev": "npx http-server -o -c-1"
+  },
+  "keywords": ["2048", "game", "ai", "expectimax", "mcts"],
+  "author": "AI",
+  "license": "MIT",
+  "devDependencies": {
+    "http-server": "^14.1.1"
+  }
+}

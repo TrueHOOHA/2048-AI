@@ -1,0 +1,66 @@
+```
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+server.log
+
+# Environment
+.env
+.env.local
+.env.*
+
+# Package manager
+package-lock.json
+
+# Build/dist files
+dist/
+build/
+*.min.js
+*.js.map
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.tmp
+*.swp
+
+# Python (if any Python files exist in the project)
+__pycache__/
+*.pyc
+*.pyo
+.Python
+venv/
+.venv/
+
+# Compressed files
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
+```

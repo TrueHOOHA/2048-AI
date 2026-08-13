@@ -1,6 +1,5 @@
 import { ExpectimaxAI } from './expectimax.js';
 import { Evaluator } from './evaluator.js';
-import { runSearch } from './multi-thread.js';
 
 /**
  * 2048游戏AI主类
@@ -47,7 +46,7 @@ export class GameAI {
     /**
      * 执行一次AI移动，返回移动方向（0-上 1-右 2-下 3-左，失败返回 null）
      */
-    async makeOneMove() {
+    makeOneMove() {
         if (this.game.isGameOver()) return null;
 
         const startTime = performance.now();
@@ -63,16 +62,16 @@ export class GameAI {
 
         switch (activeAlgorithm) {
             case 'expectimax':
-                direction = await this.expectimaxDecision();
+                direction = this.expectimaxDecision();
                 break;
             case 'mcts':
                 direction = this.mctsDecision();
                 break;
             case 'hybrid':
-                direction = await this.hybridDecision();
+                direction = this.hybridDecision();
                 break;
             default:
-                direction = await this.expectimaxDecision();
+                direction = this.expectimaxDecision();
         }
 
         const endTime = performance.now();
@@ -103,20 +102,14 @@ export class GameAI {
     }
 
     /**
-     * Expectimax决策（多线程，worker 不可用时回退同步）
+     * Expectimax决策（同步为主，worker 可用时异步加速）
      */
-    async expectimaxDecision() {
-        const grid = this.game.getGrid();
-        try {
-            const result = await runSearch(grid, this.depth);
-            if (result.error) throw new Error(result.error);
-            this.nodesEvaluated = result.nodesEvaluated || 0;
-            if (result.direction !== null) return result.direction;
-        } catch (e) {
-            // worker 不可用，回退到同步实现
-        }
+    expectimaxDecision() {
         this.nodesEvaluated = 0;
-        return this.expectimaxAI.getBestMove(this.game, this.depth);
+        this.expectimaxAI.nodesEvaluated = 0;
+        const dir = this.expectimaxAI.getBestMove(this.game, this.depth);
+        this.nodesEvaluated = this.expectimaxAI.nodesEvaluated;
+        return dir;
     }
 
     /**
@@ -234,7 +227,7 @@ export class GameAI {
     /**
      * 混合算法决策
      */
-    async hybridDecision() {
+    hybridDecision() {
         const grid = this.game.getGrid();
         const emptyTiles = this.evaluator.getAvailablePositions(grid).length;
         const highestTile = this.evaluator.getHighestTile(grid);
@@ -242,7 +235,7 @@ export class GameAI {
         if (highestTile >= 1024) {
             const savedDepth = this.depth;
             this.depth = Math.max(this.depth + 1, 6);
-            const direction = await this.expectimaxDecision();
+            const direction = this.expectimaxDecision();
             this.depth = savedDepth;
             return direction;
         } else if (this.evaluator.evaluateSnakePattern(grid) > 0.7) {
@@ -250,13 +243,13 @@ export class GameAI {
         } else if (emptyTiles >= 8) {
             const savedDepth = this.depth;
             this.depth = Math.min(this.depth + 1, 7);
-            const direction = await this.expectimaxDecision();
+            const direction = this.expectimaxDecision();
             this.depth = savedDepth;
             return direction;
         } else {
             const savedDepth = this.depth;
             this.depth = Math.min(this.depth + 1, 7);
-            const direction = await this.expectimaxDecision();
+            const direction = this.expectimaxDecision();
             this.depth = savedDepth;
             return direction;
         }

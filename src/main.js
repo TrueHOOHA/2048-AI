@@ -134,9 +134,9 @@ export class GameController {
         // AI移动按钮
         const aiMoveButton = document.getElementById('ai-move');
         if (aiMoveButton) {
-            aiMoveButton.addEventListener('click', async () => {
+            aiMoveButton.addEventListener('click', () => {
                 this.prevGrid = this.game.grid.clone();
-                const dir = await this.ai.makeOneMove();
+                const dir = this.ai.makeOneMove();
                 this.renderer.render(this.prevGrid, dir ?? 0);
                 this.checkGameStatus();
             });
@@ -147,14 +147,12 @@ export class GameController {
         if (aiAutoPlayButton) {
             aiAutoPlayButton.addEventListener('click', () => {
                 if (!this.autoPlayInterval) {
-                    const step = async () => {
+                    this.autoPlayInterval = setInterval(() => {
                         this.prevGrid = this.game.grid.clone();
-                        const dir = await this.ai.makeOneMove();
+                        const dir = this.ai.makeOneMove();
                         this.renderer.render(this.prevGrid, dir ?? 0);
                         this.checkGameStatus();
-                        this.autoPlayInterval = setTimeout(step, 100);
-                    };
-                    this.autoPlayInterval = setTimeout(step, 100);
+                    }, 100);
                 }
             });
         }
@@ -164,7 +162,7 @@ export class GameController {
         if (aiStopButton) {
             aiStopButton.addEventListener('click', () => {
                 if (this.autoPlayInterval) {
-                    clearTimeout(this.autoPlayInterval);
+                    clearInterval(this.autoPlayInterval);
                     this.autoPlayInterval = null;
                 }
             });

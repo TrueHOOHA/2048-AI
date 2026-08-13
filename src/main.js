@@ -11,9 +11,10 @@ export class GameController {
         this.game = new GameCore();
         this.ai = new GameAI(this.game);
         this.renderer = new Renderer(this.game);
-        
+
         this.autoPlayInterval = null;
-        
+        this.prevGrid = null;
+
         this.init();
     }
 
@@ -25,7 +26,7 @@ export class GameController {
         this.game.reset();
         
         // 渲染初始状态
-        this.renderer.render();
+        this.renderer.render(null);
         
         // 绑定事件
         this.bindEvents();
@@ -82,7 +83,8 @@ export class GameController {
                 moved = this.game.move(direction);
                 
                 if (moved) {
-                    this.renderer.render();
+                    this.renderer.render(this.prevGrid);
+                    this.prevGrid = this.game.grid.clone();
                     this.checkGameStatus();
                 }
             }
@@ -133,8 +135,9 @@ export class GameController {
         const aiMoveButton = document.getElementById('ai-move');
         if (aiMoveButton) {
             aiMoveButton.addEventListener('click', () => {
+                this.prevGrid = this.game.grid.clone();
                 this.ai.makeOneMove();
-                this.renderer.render();
+                this.renderer.render(this.prevGrid);
                 this.checkGameStatus();
             });
         }
@@ -145,8 +148,9 @@ export class GameController {
             aiAutoPlayButton.addEventListener('click', () => {
                 if (!this.autoPlayInterval) {
                     this.autoPlayInterval = setInterval(() => {
+                        this.prevGrid = this.game.grid.clone();
                         this.ai.makeOneMove();
-                        this.renderer.render();
+                        this.renderer.render(this.prevGrid);
                         this.checkGameStatus();
                     }, 100);
                 }
@@ -206,7 +210,8 @@ export class GameController {
      */
     restart() {
         this.game.reset();
-        this.renderer.render();
+        this.prevGrid = null;
+        this.renderer.render(null);
         this.renderer.hideMessage();
         
         // 停止自动播放

@@ -100,8 +100,28 @@ h1 {
     text-align: center;
     border-radius: 3px;
     z-index: 10;
-    transition: all 0.1s ease-in-out;
+    transition: transform 0.15s ease-in-out;
     font-size: 35px;
+}
+
+.tile.tile-new {
+    animation: tile-spawn 0.2s ease-out;
+}
+
+.tile.tile-merged {
+    animation: tile-pop 0.2s ease-out;
+    z-index: 20;
+}
+
+@keyframes tile-spawn {
+    0% { opacity: 0; transform: scale(0); }
+    100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes tile-pop {
+    0%   { transform: scale(1); }
+    50%  { transform: scale(1.2); }
+    100% { transform: scale(1); }
 }
 
 .tile-2 { background: #eee4da; }

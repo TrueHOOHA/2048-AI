@@ -80,11 +80,11 @@ export class GameController {
             }
             
             if (direction !== null) {
+                this.prevGrid = this.game.grid.clone();
                 moved = this.game.move(direction);
-                
+
                 if (moved) {
                     this.renderer.render(this.prevGrid);
-                    this.prevGrid = this.game.grid.clone();
                     this.checkGameStatus();
                 }
             }

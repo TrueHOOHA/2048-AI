@@ -89,7 +89,6 @@ export class GameAI {
         // 执行最佳移动方向
         if (direction !== null) {
             this.game.move(direction);
-            this.game.grid.insertTileAtRandomEmptyPosition();
             this.game.checkGameStatus();
         }
     }

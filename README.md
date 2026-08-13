@@ -70,8 +70,8 @@ npx http-server -c-1 # 启动本地服务器（禁用缓存）
 
 ## 许可证
 
-MIT License
+GNU General Public License v3.0
 
----
+See [LICENSE](LICENSE) for details.
 
 [English README](README_EN.md)

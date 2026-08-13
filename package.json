@@ -10,7 +10,7 @@
   },
   "keywords": ["2048", "game", "ai", "expectimax", "mcts"],
   "author": "AI",
-  "license": "MIT",
+  "license": "GPL-3.0",
   "devDependencies": {
     "http-server": "^14.1.1"
   }

@@ -70,7 +70,9 @@ Then open `http://localhost:8080` in your browser (ES modules require a local se
 
 ## License
 
-MIT License
+GNU General Public License v3.0
+
+See [LICENSE](LICENSE) for details.
 
 ---
 

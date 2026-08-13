@@ -8,6 +8,7 @@ import { Renderer } from './ui/renderer.js';
  */
 export class GameController {
     constructor() {
+        console.log('GameController init');
         this.game = new GameCore();
         this.ai = new GameAI(this.game);
         this.renderer = new Renderer(this.game);
@@ -36,6 +37,7 @@ export class GameController {
      * 绑定事件
      */
     bindEvents() {
+        console.log('bindEvents called');
         // 键盘事件
         this.bindKeyboardEvents();
         

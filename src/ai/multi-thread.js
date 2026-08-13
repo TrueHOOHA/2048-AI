@@ -7,6 +7,9 @@ const pending = new Map();
 
 function getWorker() {
     if (worker) return worker;
+    if (typeof Worker === 'undefined') {
+        throw new Error('Web Worker not supported');
+    }
     worker = new Worker('src/ai/ai-worker.js', { type: 'module' });
     worker.onmessage = function(e) {
         const { taskId: id, direction, nodesEvaluated } = e.data;

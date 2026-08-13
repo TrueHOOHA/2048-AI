@@ -103,13 +103,20 @@ export class GameAI {
     }
 
     /**
-     * Expectimax决策（多线程）
+     * Expectimax决策（多线程，worker 不可用时回退同步）
      */
     async expectimaxDecision() {
         const grid = this.game.getGrid();
-        const result = await runSearch(grid, this.depth);
-        this.nodesEvaluated = result.nodesEvaluated || 0;
-        return result.direction;
+        try {
+            const result = await runSearch(grid, this.depth);
+            if (result.error) throw new Error(result.error);
+            this.nodesEvaluated = result.nodesEvaluated || 0;
+            if (result.direction !== null) return result.direction;
+        } catch (e) {
+            // worker 不可用，回退到同步实现
+        }
+        this.nodesEvaluated = 0;
+        return this.expectimaxAI.getBestMove(this.game, this.depth);
     }
 
     /**

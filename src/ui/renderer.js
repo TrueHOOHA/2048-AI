@@ -1,6 +1,6 @@
 /**
  * 2048游戏渲染器
- * 通过直接操作 transform 内联样式驱动动画，避免 class 切换问题
+ * 使用纯 CSS transition 驱动所有动画，避免 @keyframes 与 transition 冲突
  */
 export class Renderer {
     constructor(game) {
@@ -11,35 +11,21 @@ export class Renderer {
         this.messageContainer = document.querySelector('.game-message');
     }
 
-    /**
-     * 计算某格子在 tile-container 内的像素偏移
-     * 桌面：gap=15px, cell=82.5px → step=97.5
-     * 移动端（max-width:520px）：gap=10px, cell=57.5px → step=67.5
-     */
     _pos(x, y) {
         const isMobile = window.innerWidth <= 520;
         const step = isMobile ? 67.5 : 97.5;
         return { px: x * step, py: y * step };
     }
 
-    /**
-     * 渲染游戏网格
-     * @param {number[][]} prev - 移动前的网格快照（null 表示首次渲染）
-     */
     render(prev = null) {
         const { moves, spawns, merges, removes } = this.computeDiff(prev);
-        // 先处理移除（淡出）
         removes.forEach(r => this.removeTile(r));
-        // 再处理移动、合并、新建（在 remove 之后，避免冲突）
         moves.forEach(m => this.moveTile(m));
         spawns.forEach(s => this.spawnTile(s));
         merges.forEach(m => this.mergeTile(m));
         this.updateScore();
     }
 
-    /**
-     * 计算 diff：moves / spawns / merges / removes
-     */
     computeDiff(prev) {
         const moves = [];
         const spawns = [];
@@ -47,7 +33,6 @@ export class Renderer {
         const removes = [];
 
         if (!prev) {
-            // 首次渲染：全部 spawn
             for (let x = 0; x < this.game.size; x++) {
                 for (let y = 0; y < this.game.size; y++) {
                     const v = this.game.grid.cells[x][y];
@@ -57,9 +42,8 @@ export class Renderer {
             return { moves, spawns, merges, removes };
         }
 
-        // 收集当前和 prev 的非零瓦片
-        const curTiles = [];   // {x, y, val}
-        const prevTiles = [];  // {x, y, val}
+        const curTiles = [];
+        const prevTiles = [];
         const curKeySet = new Set();
         const prevKeySet = new Set();
 
@@ -74,7 +58,6 @@ export class Renderer {
             }
         }
 
-        // 检测合并：同一位置 cur 值 > prev 值
         const mergeKeys = new Set();
         for (const ct of curTiles) {
             const pk = `${ct.x},${ct.y}`;
@@ -83,7 +66,6 @@ export class Renderer {
             }
         }
 
-        // 检测移除：prev 有、cur 没有、且不是合并目标
         for (const pt of prevTiles) {
             const key = `${pt.x},${pt.y}`;
             if (!mergeKeys.has(key) && !curKeySet.has(key)) {
@@ -91,7 +73,6 @@ export class Renderer {
             }
         }
 
-        // 处理每个 cur 瓦片
         const processedCurKeys = new Set();
         for (const ct of curTiles) {
             const ckey = `${ct.x},${ct.y}`;
@@ -101,18 +82,15 @@ export class Renderer {
                 continue;
             }
             if (prevKeySet.has(ckey) && prev[ct.x][ct.y] === ct.val) {
-                // 值不变，跳过
                 processedCurKeys.add(ckey);
                 continue;
             }
 
-            // 在 prev 中找同值瓦片作为移动源
             let moved = false;
             for (const pt of prevTiles) {
                 const pkey = `${pt.x},${pt.y}`;
                 if (processedCurKeys.has(pkey)) continue;
                 if (pt.val === ct.val) {
-                    // 找到候选，创建移动记录
                     const srcEl = this.tileContainer?.querySelector(`.tile[data-key="${pkey}"]`);
                     if (srcEl) {
                         moves.push({ fromX: pt.x, fromY: pt.y, x: ct.x, y: ct.y, value: ct.val, el: srcEl });
@@ -124,7 +102,6 @@ export class Renderer {
             }
 
             if (!moved) {
-                // 没有找到可移动的源瓦片 → 新建
                 spawns.push({ value: ct.val, x: ct.x, y: ct.y });
             }
             processedCurKeys.add(ckey);
@@ -133,9 +110,6 @@ export class Renderer {
         return { moves, spawns, merges, removes };
     }
 
-    /**
-     * 移动瓦片：从源格平滑滑到目标格
-     */
     moveTile(m) {
         if (!this.tileContainer || !m.el) {
             this.spawnTile({ value: m.value, x: m.x, y: m.y });
@@ -146,12 +120,10 @@ export class Renderer {
         const src = this._pos(m.fromX, m.fromY);
         const dest = this._pos(m.x, m.y);
 
-        // 1. 移除 transition，将瓦片固定在源位置（确保当前视觉正确）
         el.style.transition = 'none';
         el.style.transform = `translate(${src.px}px, ${src.py}px)`;
-        void el.offsetWidth; // 强制 reflow，让浏览器接受源位置
+        void el.offsetWidth;
 
-        // 2. 恢复 transition，滑向目标位置
         el.style.transition = 'transform 0.15s ease-in-out';
         el.style.transform = `translate(${dest.px}px, ${dest.py}px)`;
 
@@ -159,42 +131,38 @@ export class Renderer {
         el.dataset.pos = `${m.x},${m.y}`;
     }
 
-    /**
-     * 新建瓦片：从缩放 0 动画到正常大小，出现在指定格子
-     */
     spawnTile(s) {
         if (!this.tileContainer) return;
         const pos = this._pos(s.x, s.y);
 
         const tile = document.createElement('div');
-        tile.className = 'tile tile-new tile-spawning';
+        tile.className = `tile tile-${s.value}`;
         tile.dataset.key = `${s.x},${s.y}`;
         tile.dataset.pos = `${s.x},${s.y}`;
         tile.textContent = s.value;
 
-        // 初始状态：scale(0) + 位于目标格
-        tile.style.transform = 'translate(' + pos.px + 'px, ' + pos.py + 'px) scale(0)';
+        tile.style.transition = 'none';
+        tile.style.transform = `translate(${pos.px}px, ${pos.py}px) scale(0)`;
         tile.style.opacity = '0';
-
         this.tileContainer.appendChild(tile);
 
-        // 下一帧：触发 scale-in 动画
-        requestAnimationFrame(() => {
-            tile.classList.remove('tile-spawning');
-        });
+        void tile.offsetWidth;
 
-        setTimeout(() => tile.classList.remove('tile-new'), 300);
+        tile.style.transition = 'transform 0.2s ease-out, opacity 0.2s ease-out';
+        tile.style.transform = `translate(${pos.px}px, ${pos.py}px) scale(1)`;
+        tile.style.opacity = '1';
+
+        setTimeout(() => {
+            tile.style.transition = '';
+        }, 200);
     }
 
-    /**
-     * 合并瓦片：在目标格弹跳出现
-     */
     mergeTile(m) {
         if (!this.tileContainer) return;
         const pos = this._pos(m.x, m.y);
 
         const tile = document.createElement('div');
-        tile.className = 'tile tile-merged';
+        tile.className = `tile tile-${m.value}`;
         tile.dataset.key = `${m.x},${m.y}`;
         tile.dataset.pos = `${m.x},${m.y}`;
         tile.textContent = m.value;
@@ -202,12 +170,20 @@ export class Renderer {
         tile.style.transform = `translate(${pos.px}px, ${pos.py}px)`;
         this.tileContainer.appendChild(tile);
 
-        setTimeout(() => tile.classList.remove('tile-merged'), 200);
+        void tile.offsetWidth;
+
+        tile.style.transition = 'transform 0.1s ease-out';
+        tile.style.transform = `translate(${pos.px}px, ${pos.py}px) scale(1.2)`;
+
+        setTimeout(() => {
+            tile.style.transition = 'transform 0.1s ease-out';
+            tile.style.transform = `translate(${pos.px}px, ${pos.py}px) scale(1)`;
+            setTimeout(() => {
+                tile.style.transition = '';
+            }, 100);
+        }, 100);
     }
 
-    /**
-     * 移除瓦片：淡出后删除 DOM
-     */
     removeTile(r) {
         if (!this.tileContainer) return;
         const el = this.tileContainer.querySelector(`.tile[data-key="${r.key}"]`);
@@ -218,9 +194,6 @@ export class Renderer {
         }
     }
 
-    /**
-     * 更新分数显示
-     */
     updateScore() {
         if (this.scoreContainer) {
             this.scoreContainer.textContent = this.game.getScore();
@@ -230,9 +203,6 @@ export class Renderer {
         }
     }
 
-    /**
-     * 显示游戏消息
-     */
     showMessage(message, type = '') {
         if (this.messageContainer) {
             this.messageContainer.style.display = 'flex';
@@ -247,9 +217,6 @@ export class Renderer {
         }
     }
 
-    /**
-     * 隐藏游戏消息
-     */
     hideMessage() {
         if (this.messageContainer) {
             this.messageContainer.style.display = 'none';

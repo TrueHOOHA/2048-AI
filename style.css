@@ -101,32 +101,6 @@ h1 {
     border-radius: 3px;
     z-index: 10;
     font-size: 35px;
-    transition: transform 0.15s ease-in-out;
-}
-
-.tile.tile-new {
-    animation: tile-spawn 0.2s ease-out forwards;
-}
-
-.tile.tile-merged {
-    animation: tile-pop 0.2s ease-out forwards;
-    z-index: 20;
-    transition: none;
-}
-
-.tile.tile-spawning {
-    transition: none;
-}
-
-@keyframes tile-spawn {
-    0%   { opacity: 0; transform: scale(0); }
-    100% { opacity: 1; transform: scale(1); }
-}
-
-@keyframes tile-pop {
-    0%   { transform: scale(1); }
-    50%  { transform: scale(1.2); }
-    100% { transform: scale(1); }
 }
 
 .tile-2 { background: #eee4da; }

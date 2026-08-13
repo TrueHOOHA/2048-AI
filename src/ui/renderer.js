@@ -145,8 +145,9 @@ export class Renderer {
      * 移动瓦片：更新 DOM 的 transform，触发 CSS transition
      */
     moveTile(el, fromX, fromY, toX, toY) {
-        // 移除旧位置类，添加新位置类 → CSS transition 生效
+        // 移除旧位置类，强制 reflow，再添加新位置类 → CSS transition 生效
         el.classList.remove(`tile-position-${fromX + 1}-${fromY + 1}`);
+        void el.offsetWidth; // 触发 reflow，确保 transition 能检测到 transform 变化
         el.classList.add(`tile-position-${toX + 1}-${toY + 1}`);
         el.dataset.key = `${toX},${toY}`;
     }

@@ -16,160 +16,162 @@ export class Renderer {
      * @param {number[][]} prev - 移动前的网格快照（null 表示首次渲染）
      */
     render(prev = null) {
-        const { moves, spawns, removes } = this.diffGrid(prev);
-        moves.forEach(m => this.animateMove(m));
-        spawns.forEach(s => this.animateSpawn(s));
-        removes.forEach(r => this.removeTile(r));
+        // 第一遍：识别哪些瓦片会被移动，记录它们的 key
+        const movedKeys = new Set();
+        this.identifyMoves(prev, movedKeys);
+
+        // 第二遍：移除未移动的旧瓦片（带淡出动画）
+        this.removeUnusedTiles(prev, movedKeys);
+        // 第三遍：移动现有瓦片 + 创建新瓦片/合并瓦片
+        this.updateTiles(prev, movedKeys);
         this.updateScore();
     }
 
     /**
-     * Diff 前后两次网格，检测移动/合并/新生成/移除
+     * 识别哪些瓦片会被移动，收集它们的 prev key 到 movedKeys
      */
-    diffGrid(prev) {
-        const moves = [];
-        const spawns = [];
-        const removes = [];
-
-        if (!prev) {
-            // 首次渲染，所有瓦片视为新生成
-            for (let x = 0; x < this.game.size; x++) {
-                for (let y = 0; y < this.game.size; y++) {
-                    if (this.game.grid.cells[x][y] !== 0) {
-                        spawns.push({ value: this.game.grid.cells[x][y], x, y });
-                    }
-                }
-            }
-            return { moves, spawns, removes };
-        }
-
-        // 收集 prev 和 cur 中所有非零瓦片
-        const prevTiles = [];
-        const curTiles  = [];
+    identifyMoves(prev, movedKeys) {
+        if (!prev || !this.tileContainer) return;
+        const curSet = new Set();
         for (let x = 0; x < this.game.size; x++) {
             for (let y = 0; y < this.game.size; y++) {
-                if (prev[x][y] !== 0) prevTiles.push({ x, y, val: prev[x][y] });
-                if (this.game.grid.cells[x][y] !== 0) curTiles.push({ x, y, val: this.game.grid.cells[x][y] });
+                if (this.game.grid.cells[x][y] !== 0) curSet.add(`${x},${y}`);
             }
         }
-
-        // cur 位置集合 & prev 位置集合
-        const curKeySet = new Set(curTiles.map(t => `${t.x},${t.y}`));
-        const prevKeySet = new Set(prevTiles.map(t => `${t.x},${t.y}`));
-
-        // 建立 prev 的位置索引 map: "x,y" -> tile object
-        const prevMap = new Map();
-        for (const t of prevTiles) prevMap.set(`${t.x},${t.y}`, t);
-
-        // 合并标记：cur 中值比 prev 同位置大的位置
-        const mergeKeys = new Set();
-        for (const ct of curTiles) {
-            const pk = `${ct.x},${ct.y}`;
-            if (prevMap.has(pk) && ct.val > prevMap.get(pk).val) {
-                mergeKeys.add(pk);
-            }
-        }
-
-        // 分类处理每个 cur 瓦片
-        for (const ct of curTiles) {
-            const key = `${ct.x},${ct.y}`;
-
-            if (mergeKeys.has(key)) {
-                // 合并：目标格弹跳出现
-                spawns.push({ value: ct.val, x: ct.x, y: ct.y, merged: true });
-            } else if (prevMap.has(key) && prevMap.get(key).val === ct.val) {
-                // 值相同、位置相同 → 无需动画
-            } else if (prevMap.has(key) && prevMap.get(key).val !== ct.val) {
-                // 值变了但不在 mergeKeys 里（理论上不应该发生）→ 当作 spawn
-                spawns.push({ value: ct.val, x: ct.x, y: ct.y, merged: false });
-            } else {
-                // cur 有新位置，判断是 move 还是 spawn
-                // 找 prev 中值相同且不在 mergeKeys 中的瓦片，作为候选源
-                const candidates = prevTiles.filter(pt =>
-                    pt.val === ct.val && !mergeKeys.has(`${pt.x},${pt.y}`)
-                );
-
-                if (candidates.length > 0) {
-                    // 有候选源 → 移动动画（取最近的）
-                    let best = candidates[0], bestDist = Infinity;
-                    for (const c of candidates) {
-                        const dist = Math.abs(c.x - ct.x) + Math.abs(c.y - ct.y);
-                        if (dist < bestDist) { bestDist = dist; best = c; }
+        const processed = new Set();
+        for (const ckey of curSet) {
+            const [cx, cy] = ckey.split(',').map(Number);
+            const cv = this.game.grid.cells[cx][cy];
+            if (prev[cx][cy] === cv) { processed.add(ckey); continue; }
+            if (prev[cx][cy] !== undefined && cv > prev[cx][cy]) { processed.add(ckey); continue; }
+            for (let px = 0; px < this.game.size; px++) {
+                for (let py = 0; py < this.game.size; py++) {
+                    const pkey = `${px},${py}`;
+                    if (processed.has(pkey)) continue;
+                    if (prev[px][py] === cv) {
+                        const el = this.tileContainer.querySelector(`.tile[data-key="${pkey}"]`);
+                        if (el) {
+                            movedKeys.add(pkey);
+                            processed.add(ckey);
+                            processed.add(pkey);
+                            break;
+                        }
                     }
-                    // 排除目标位置本身也是 prev 有但被合并的情况
-                    if (bestDist > 0) {
-                        moves.push({ fromKey: `${best.x},${best.y}`, fromX: best.x, fromY: best.y,
-                                     x: ct.x, y: ct.y, value: ct.val });
-                    } else {
-                        spawns.push({ value: ct.val, x: ct.x, y: ct.y, merged: false });
-                    }
-                } else {
-                    // 没有候选源 → 新生成
-                    spawns.push({ value: ct.val, x: ct.x, y: ct.y, merged: false });
                 }
             }
         }
+    }
 
-        // 移除：prev 有但 cur 没有，且不是合并目标
-        for (const pt of prevTiles) {
-            const key = `${pt.x},${pt.y}`;
-            if (!curKeySet.has(key) && !mergeKeys.has(key)) {
-                removes.push({ x: pt.x, y: pt.y, key });
+    /**
+     * 移除 prev 中存在但当前不存在且未被移动的瓦片（带淡出动画）
+     */
+    removeUnusedTiles(prev, movedKeys) {
+        if (!this.tileContainer || !prev) return;
+        const curSet = new Set();
+        for (let x = 0; x < this.game.size; x++) {
+            for (let y = 0; y < this.game.size; y++) {
+                if (this.game.grid.cells[x][y] !== 0) curSet.add(`${x},${y}`);
             }
         }
-
-        return { moves, spawns, removes };
-    }
-
-    /**
-     * 移动动画：复用 DOM 元素，通过 CSS transition 滑动
-     */
-    animateMove(m) {
-        if (!this.tileContainer) return;
-        const el = this.tileContainer.querySelector(`.tile[data-key="${m.fromKey}"]`);
-        if (!el) {
-            // 找不到源元素，当作新生成处理
-            this.animateSpawn(m);
-            return;
+        for (const key of movedKeys) curSet.delete(key);
+        for (const key of curSet) {
+            const el = this.tileContainer.querySelector(`.tile[data-key="${key}"]`);
+            if (el) {
+                el.style.transition = 'opacity 0.12s';
+                el.style.opacity = '0';
+                setTimeout(() => el.remove(), 130);
+            }
         }
-
-        el.classList.remove(`tile-position-${m.fromX + 1}-${m.fromY + 1}`);
-        el.classList.add(`tile-position-${m.x + 1}-${m.y + 1}`);
-        el.dataset.key = `${m.x},${m.y}`;
-
-        el.addEventListener('transitionend', () => {
-            el.classList.remove('tile-moving');
-        }, { once: true });
     }
 
     /**
-     * 新生成/合并动画：创建 DOM 元素并播放缩放效果
+     * 更新瓦片：移动已有瓦片，创建新瓦片和合并瓦片
      */
-    animateSpawn(s) {
+    updateTiles(prev, movedKeys) {
+        if (!this.tileContainer) return;
+        const processed = new Set(movedKeys);
+
+        for (let x = 0; x < this.game.size; x++) {
+            for (let y = 0; y < this.game.size; y++) {
+                const val = this.game.grid.cells[x][y];
+                if (val === 0) continue;
+                const key = `${x},${y}`;
+
+                if (prev && prev[x][y] === val) {
+                    processed.add(key);
+                    continue;
+                }
+
+                if (prev && prev[x][y] !== undefined && val > prev[x][y]) {
+                    // 合并：先清除旧瓦片，再创建新瓦片
+                    const oldEl = this.tileContainer.querySelector(`.tile[data-key="${key}"]`);
+                    if (oldEl) oldEl.remove();
+                    this.createTile(val, x, y, true);
+                    processed.add(key);
+                    continue;
+                }
+
+                if (prev && processed.has(key)) continue;
+
+                // 查找同值的 prev 瓦片并移动它
+                let movedEl = null;
+                if (prev) {
+                    outer:
+                    for (let px = 0; px < this.game.size; px++) {
+                        for (let py = 0; py < this.game.size; py++) {
+                            const pKey = `${px},${py}`;
+                            if (processed.has(pKey)) continue;
+                            if (prev[px][py] === val) {
+                                movedEl = this.tileContainer.querySelector(`.tile[data-key="${pKey}"]`);
+                                if (movedEl) {
+                                    this.moveTile(movedEl, px, py, x, y);
+                                    processed.add(pKey);
+                                    processed.add(key);
+                                    break outer;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (movedEl) continue;
+                this.createTile(val, x, y, false);
+                processed.add(key);
+            }
+        }
+    }
+
+    /**
+     * 移动瓦片：更新 DOM 的 transform，触发 CSS transition
+     */
+    moveTile(el, fromX, fromY, toX, toY) {
+        // 移除旧位置类，添加新位置类 → CSS transition 生效
+        el.classList.remove(`tile-position-${fromX + 1}-${fromY + 1}`);
+        el.classList.add(`tile-position-${toX + 1}-${toY + 1}`);
+        el.dataset.key = `${toX},${toY}`;
+    }
+
+    /**
+     * 创建瓦片 DOM 元素
+     * @param {number} value
+     * @param {number} x
+     * @param {number} y
+     * @param {boolean} merged
+     */
+    createTile(value, x, y, merged = false) {
         if (!this.tileContainer) return;
 
         const tile = document.createElement('div');
-        tile.className = `tile tile-${s.value}${s.merged ? ' tile-merged' : ' tile-new'}`;
-        tile.dataset.key = `${s.x},${s.y}`;
-        tile.textContent = s.value;
-        tile.classList.add(`tile-position-${s.x + 1}-${s.y + 1}`);
+        tile.className = `tile tile-${value}${merged ? ' tile-merged' : ' tile-new'}`;
+        tile.dataset.key = `${x},${y}`;
+        tile.textContent = value;
+        tile.classList.add(`tile-position-${x + 1}-${y + 1}`);
         this.tileContainer.appendChild(tile);
 
-        if (s.merged) {
+        if (merged) {
             setTimeout(() => tile.classList.remove('tile-merged'), 200);
-        }
-    }
-
-    /**
-     * 移除动画：将消失的瓦片淡出
-     */
-    removeTile(r) {
-        if (!this.tileContainer) return;
-        const el = this.tileContainer.querySelector(`.tile[data-key="${r.key}"]`);
-        if (el) {
-            el.style.transition = 'opacity 0.15s';
-            el.style.opacity = '0';
-            setTimeout(() => el.remove(), 160);
+        } else {
+            setTimeout(() => tile.classList.remove('tile-new'), 300);
         }
     }
 

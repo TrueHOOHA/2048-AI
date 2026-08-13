@@ -1,6 +1,6 @@
 /**
  * 2048游戏渲染器
- * 使用纯 CSS transition 驱动所有动画，避免 @keyframes 与 transition 冲突
+ * 使用方向感知的瓦片匹配，精确追踪每个瓦片的移动/合并/生成
  */
 export class Renderer {
     constructor(game) {
@@ -17,8 +17,8 @@ export class Renderer {
         return { px: x * step, py: y * step };
     }
 
-    render(prev = null) {
-        const { moves, spawns, merges, removes } = this.computeDiff(prev);
+    render(prev = null, direction = 0) {
+        const { moves, spawns, merges, removes } = this.computeDiff(prev, direction);
         removes.forEach(r => this.removeTile(r));
         moves.forEach(m => this.moveTile(m));
         spawns.forEach(s => this.spawnTile(s));
@@ -26,7 +26,7 @@ export class Renderer {
         this.updateScore();
     }
 
-    computeDiff(prev) {
+    computeDiff(prev, direction) {
         const moves = [];
         const spawns = [];
         const merges = [];
@@ -42,85 +42,118 @@ export class Renderer {
             return { moves, spawns, merges, removes };
         }
 
-        const curTiles = [];
-        const prevTiles = [];
-        const curKeySet = new Set();
-        const prevKeySet = new Set();
+        const size = this.game.size;
+        const movedGrid = Array.from({ length: size }, () => new Array(size).fill(0));
+        const consumedPrev = new Set();
 
-        for (let x = 0; x < this.game.size; x++) {
-            for (let y = 0; y < this.game.size; y++) {
-                const cv = this.game.grid.cells[x][y];
-                const pv = prev[x][y];
-                if (cv !== 0) curTiles.push({ x, y, val: cv });
-                if (pv !== 0) prevTiles.push({ x, y, val: pv });
-                if (cv !== 0) curKeySet.add(`${x},${y}`);
-                if (pv !== 0) prevKeySet.add(`${x},${y}`);
+        const buildLines = () => {
+            const lines = [];
+            if (direction === 0) {
+                for (let x = 0; x < size; x++) {
+                    const cells = [];
+                    for (let y = 0; y < size; y++) cells.push({ x, y });
+                    lines.push({ cells, axis: 'y' });
+                }
+            } else if (direction === 1) {
+                for (let y = 0; y < size; y++) {
+                    const cells = [];
+                    for (let x = size - 1; x >= 0; x--) cells.push({ x, y });
+                    lines.push({ cells, axis: 'x' });
+                }
+            } else if (direction === 2) {
+                for (let x = 0; x < size; x++) {
+                    const cells = [];
+                    for (let y = size - 1; y >= 0; y--) cells.push({ x, y });
+                    lines.push({ cells, axis: 'y' });
+                }
+            } else {
+                for (let y = 0; y < size; y++) {
+                    const cells = [];
+                    for (let x = 0; x < size; x++) cells.push({ x, y });
+                    lines.push({ cells, axis: 'x' });
+                }
             }
-        }
+            return lines;
+        };
 
-        const mergeKeys = new Set();
-        for (const ct of curTiles) {
-            const pk = `${ct.x},${ct.y}`;
-            if (prevKeySet.has(pk) && ct.val > prev[ct.x][ct.y]) {
-                mergeKeys.add(pk);
+        for (const line of buildLines()) {
+            const prevTiles = [];
+            for (const c of line.cells) {
+                if (prev[c.x][c.y] !== 0) prevTiles.push({ x: c.x, y: c.y, val: prev[c.x][c.y] });
             }
-        }
+            if (prevTiles.length === 0) continue;
 
-        for (const pt of prevTiles) {
-            const key = `${pt.x},${pt.y}`;
-            if (!mergeKeys.has(key) && !curKeySet.has(key)) {
-                removes.push({ x: pt.x, y: pt.y, key });
-            }
-        }
-
-        const processedCurKeys = new Set();
-        for (const ct of curTiles) {
-            const ckey = `${ct.x},${ct.y}`;
-            if (mergeKeys.has(ckey)) {
-                merges.push({ value: ct.val, x: ct.x, y: ct.y });
-                processedCurKeys.add(ckey);
-                continue;
-            }
-            if (prevKeySet.has(ckey) && prev[ct.x][ct.y] === ct.val) {
-                processedCurKeys.add(ckey);
-                continue;
-            }
-
-            let moved = false;
-            for (const pt of prevTiles) {
-                const pkey = `${pt.x},${pt.y}`;
-                if (processedCurKeys.has(pkey)) continue;
-                if (pt.val === ct.val) {
-                    const srcEl = this.tileContainer?.querySelector(`.tile[data-key="${pkey}"]`);
-                    if (srcEl) {
-                        moves.push({ fromX: pt.x, fromY: pt.y, x: ct.x, y: ct.y, value: ct.val, el: srcEl });
-                        processedCurKeys.add(pkey);
-                        moved = true;
-                        break;
-                    }
+            const result = [];
+            let i = 0;
+            while (i < prevTiles.length) {
+                const t = prevTiles[i];
+                if (i + 1 < prevTiles.length && prevTiles[i + 1].val === t.val) {
+                    result.push({ val: t.val * 2, srcs: [t, prevTiles[i + 1]] });
+                    i += 2;
+                } else {
+                    result.push({ val: t.val, srcs: [t] });
+                    i += 1;
                 }
             }
 
-            if (!moved) {
-                spawns.push({ value: ct.val, x: ct.x, y: ct.y });
+            for (let j = 0; j < result.length; j++) {
+                const r = result[j];
+                const dest = line.cells[j];
+                movedGrid[dest.x][dest.y] = r.val;
+
+                for (const src of r.srcs) {
+                    consumedPrev.add(`${src.x},${src.y}`);
+                }
+
+                if (r.srcs.length === 1) {
+                    const src = r.srcs[0];
+                    const srcKey = `${src.x},${src.y}`;
+                    const destKey = `${dest.x},${dest.y}`;
+                    if (srcKey !== destKey) {
+                        moves.push({ fromX: src.x, fromY: src.y, x: dest.x, y: dest.y, value: r.val });
+                    }
+                } else {
+                    for (const src of r.srcs) {
+                        removes.push({ x: src.x, y: src.y, key: `${src.x},${src.y}` });
+                    }
+                    merges.push({ value: r.val, x: dest.x, y: dest.y });
+                }
             }
-            processedCurKeys.add(ckey);
+        }
+
+        for (let x = 0; x < size; x++) {
+            for (let y = 0; y < size; y++) {
+                if (prev[x][y] !== 0 && !consumedPrev.has(`${x},${y}`)) {
+                    removes.push({ x, y, key: `${x},${y}` });
+                }
+            }
+        }
+
+        for (let x = 0; x < size; x++) {
+            for (let y = 0; y < size; y++) {
+                const cv = this.game.grid.cells[x][y];
+                if (cv !== 0 && movedGrid[x][y] === 0) {
+                    spawns.push({ value: cv, x, y });
+                }
+            }
         }
 
         return { moves, spawns, merges, removes };
     }
 
     moveTile(m) {
-        if (!this.tileContainer || !m.el) {
+        if (!this.tileContainer) return;
+        const el = this.tileContainer.querySelector(`.tile[data-key="${m.fromX},${m.fromY}"]`);
+        if (!el) {
             this.spawnTile({ value: m.value, x: m.x, y: m.y });
             return;
         }
 
-        const el = m.el;
         const src = this._pos(m.fromX, m.fromY);
         const dest = this._pos(m.x, m.y);
 
         el.style.transition = 'none';
+        el.style.opacity = '1';
         el.style.transform = `translate(${src.px}px, ${src.py}px)`;
         void el.offsetWidth;
 

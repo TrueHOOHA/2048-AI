@@ -44,10 +44,10 @@ export class GameAI {
     }
 
     /**
-     * 执行一次AI移动
+     * 执行一次AI移动，返回移动方向（0-上 1-右 2-下 3-左，失败返回 null）
      */
     makeOneMove() {
-        if (this.game.isGameOver()) return;
+        if (this.game.isGameOver()) return null;
 
         const startTime = performance.now();
         this.nodesEvaluated = 0;
@@ -90,7 +90,9 @@ export class GameAI {
         if (direction !== null) {
             this.game.move(direction);
             this.game.checkGameStatus();
+            return direction;
         }
+        return null;
     }
 
     /**

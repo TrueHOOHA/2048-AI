@@ -84,7 +84,7 @@ export class GameController {
                 moved = this.game.move(direction);
 
                 if (moved) {
-                    this.renderer.render(this.prevGrid);
+                    this.renderer.render(this.prevGrid, direction);
                     this.checkGameStatus();
                 }
             }
@@ -136,8 +136,8 @@ export class GameController {
         if (aiMoveButton) {
             aiMoveButton.addEventListener('click', () => {
                 this.prevGrid = this.game.grid.clone();
-                this.ai.makeOneMove();
-                this.renderer.render(this.prevGrid);
+                const dir = this.ai.makeOneMove();
+                this.renderer.render(this.prevGrid, dir ?? 0);
                 this.checkGameStatus();
             });
         }
@@ -149,8 +149,8 @@ export class GameController {
                 if (!this.autoPlayInterval) {
                     this.autoPlayInterval = setInterval(() => {
                         this.prevGrid = this.game.grid.clone();
-                        this.ai.makeOneMove();
-                        this.renderer.render(this.prevGrid);
+                        const dir = this.ai.makeOneMove();
+                        this.renderer.render(this.prevGrid, dir ?? 0);
                         this.checkGameStatus();
                     }, 100);
                 }

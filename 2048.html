@@ -1,102 +1,91 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>2048游戏与AI</title>
-    <link rel="stylesheet" href="style.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>2048 · 智合</title>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>2048 游戏与AI</h1>
-            <div class="scores-container">
-                <div class="score-container">
-                    <div class="score-label">分数</div>
-                    <div id="score">0</div>
-                </div>
-                <div class="best-container">
-                    <div class="score-label">最高分</div>
-                    <div id="best-score">0</div>
-                </div>
-            </div>
-        </header>
+<div class="container">
+  <header>
+    <div class="logo">
+      <h1>2048 · 智合</h1>
+      <span class="logo-sub">AI · 2048</span>
+    </div>
+    <div class="scores">
+      <div class="score-box">
+        <div class="score-label">分数</div>
+        <div class="score-val" id="score">0</div>
+      </div>
+      <div class="score-box">
+        <div class="score-label">最高</div>
+        <div class="score-val" id="best-score">0</div>
+      </div>
+    </div>
+  </header>
 
-        <div class="game-container">
-            <div class="game-message">
-                <p></p>
-                <div class="lower">
-                    <a class="retry-button">再来一次</a>
-                </div>
-            </div>
-
-            <div class="grid-container">
-                <div class="grid-row">
-                    <div class="grid-cell"></div>
-                    <div class="grid-cell"></div>
-                    <div class="grid-cell"></div>
-                    <div class="grid-cell"></div>
-                </div>
-                <div class="grid-row">
-                    <div class="grid-cell"></div>
-                    <div class="grid-cell"></div>
-                    <div class="grid-cell"></div>
-                    <div class="grid-cell"></div>
-                </div>
-                <div class="grid-row">
-                    <div class="grid-cell"></div>
-                    <div class="grid-cell"></div>
-                    <div class="grid-cell"></div>
-                    <div class="grid-cell"></div>
-                </div>
-                <div class="grid-row">
-                    <div class="grid-cell"></div>
-                    <div class="grid-cell"></div>
-                    <div class="grid-cell"></div>
-                    <div class="grid-cell"></div>
-                </div>
-            </div>
-
-            <div class="tile-container"></div>
+  <div class="game-layout">
+    <div class="game-container">
+      <div class="game-message">
+        <p></p>
+        <div class="lower">
+          <a class="retry-button">再来一次</a>
         </div>
-
-        <div class="ai-controls">
-            <h2>AI控制</h2>
-            <div class="control-group">
-                <label for="ai-algorithm">算法选择:</label>
-                <select id="ai-algorithm">
-                    <option value="expectimax">ExpectiMax (期望最大值)</option>
-                    <option value="mcts">MCTS (蒙特卡洛树搜索)</option>
-                    <option value="hybrid">Hybrid (混合算法)</option>
-                    <option value="adaptive" selected>自适应 (动态选择最佳算法)</option>
-                </select>
-            </div>
-            
-            <div class="control-group">
-                <label for="ai-depth">搜索深度:</label>
-                <input type="range" id="ai-depth" min="1" max="8" value="4">
-                <span id="depth-value">4</span>
-            </div>
-            
-            <div class="control-group">
-                <button id="ai-move">AI走一步</button>
-                <button id="ai-auto-play">AI自动游戏</button>
-                <button id="ai-stop">停止AI</button>
-            </div>
-            
-            <div class="ai-stats">
-                <p>AI思考时间: <span id="ai-time">0</span> ms</p>
-                <p>当前使用算法: <span id="current-algorithm">自适应</span></p>
-                <p>评估节点数: <span id="nodes-evaluated">0</span></p>
-            </div>
+      </div>
+      <div class="grid-container">
+        <div class="grid-row">
+          <div class="grid-cell"></div><div class="grid-cell"></div><div class="grid-cell"></div><div class="grid-cell"></div>
         </div>
-        
-        <div class="game-explanation">
-            <p>通过 <strong>方向键</strong> 或 <strong>WASD</strong> 移动方块，相同数字的方块会合并。</p>
-            <p>使用AI算法辅助游戏，观察不同算法的表现。</p>
+        <div class="grid-row">
+          <div class="grid-cell"></div><div class="grid-cell"></div><div class="grid-cell"></div><div class="grid-cell"></div>
         </div>
+        <div class="grid-row">
+          <div class="grid-cell"></div><div class="grid-cell"></div><div class="grid-cell"></div><div class="grid-cell"></div>
+        </div>
+        <div class="grid-row">
+          <div class="grid-cell"></div><div class="grid-cell"></div><div class="grid-cell"></div><div class="grid-cell"></div>
+        </div>
+      </div>
+      <div class="tile-container"></div>
     </div>
 
-    <script type="module" src="src/main.js"></script>
+    <div class="ai-panel">
+      <h3 class="ai-title">AI 控制</h3>
+      <div class="ai-field">
+        <label for="ai-algorithm">算法选择</label>
+        <select id="ai-algorithm">
+          <option value="expectimax">ExpectiMax</option>
+          <option value="mcts">MCTS</option>
+          <option value="hybrid">Hybrid</option>
+          <option value="adaptive" selected>自适应</option>
+        </select>
+      </div>
+      <div class="ai-field">
+        <label for="ai-depth">搜索深度</label>
+        <div class="depth-row">
+          <input type="range" id="ai-depth" min="1" max="8" value="5">
+          <span id="depth-value">5</span>
+        </div>
+      </div>
+      <div class="ai-btns">
+        <button id="ai-move" class="btn-primary">AI 走一步</button>
+        <button id="ai-auto-play" class="btn-primary">自动游戏</button>
+        <button id="ai-stop" class="btn-ghost">停止</button>
+        <button class="btn-ghost retry-button" onclick="document.querySelector('.retry-button')?.click()">重来</button>
+      </div>
+      <div class="ai-stats">
+        <span>思考时间 <b id="ai-time">0</b> ms</span>
+        <span>算法 <b id="current-algorithm">自适应</b></span>
+        <span>节点 <b id="nodes-evaluated">0</b></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="explain">
+    <strong>方向键</strong> 或 <strong>WASD</strong> 移动 · 相同数字合并 · AI 算法辅助
+  </div>
+</div>
+<script type="module" src="src/main.js"></script>
 </body>
 </html>

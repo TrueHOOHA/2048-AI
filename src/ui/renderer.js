@@ -12,8 +12,8 @@ export class Renderer {
     }
 
     _pos(x, y) {
-        const isMobile = window.innerWidth <= 520;
-        const step = isMobile ? 67.5 : 97.5;
+        const isMobile = window.innerWidth <= 700;
+        const step = isMobile ? 76.5 : 105;
         return { px: x * step, py: y * step };
     }
 

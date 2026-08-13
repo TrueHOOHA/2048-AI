@@ -263,7 +263,7 @@ export class GameCore {
                 }
                 const result = slideLine(row);
                 for (let x = this.size - 1; x >= 0; x--) {
-                    newGrid[x][y] = result[this.size - 1 - y];
+                    newGrid[x][y] = result[this.size - 1 - x];
                     if (!moved && result[this.size - 1 - y] !== row[this.size - 1 - y]) {
                         moved = true;
                     }

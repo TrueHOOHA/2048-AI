@@ -12,7 +12,7 @@ export class ExpectimaxAI {
         // 转置表，用于缓存评估过的局面
         this.transpositionTable = new Map();
         // 方向权重：让AI优先考虑某些方向
-        this.directionPreference = [1.05, 1.0, 0.95, 1.02]; // 右，下，左，上
+        this.directionPreference = [1.05, 1.0, 0.95, 1.02]; // 上，右，下，左
     }
 
     /**

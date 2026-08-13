@@ -208,6 +208,25 @@ export class Evaluator {
     }
 
     /**
+     * 检查网格是否有可用移动
+     */
+    hasAvailableMoves(grid) {
+        for (let x = 0; x < this.gameSize; x++) {
+            for (let y = 0; y < this.gameSize; y++) {
+                if (grid[x][y] === 0) return true;
+            }
+        }
+        for (let x = 0; x < this.gameSize; x++) {
+            for (let y = 0; y < this.gameSize; y++) {
+                const val = grid[x][y];
+                if (x < this.gameSize - 1 && grid[x + 1][y] === val) return true;
+                if (y < this.gameSize - 1 && grid[x][y + 1] === val) return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * 评估蛇形模式的匹配度
      */
     evaluateSnakePattern(grid) {
@@ -232,21 +251,16 @@ export class Evaluator {
         // 排序并检查顺序
         const sortedValues = [...nonZeroValues].sort((a, b) => b - a);
 
-        // 检查最大的几个数字是否按蛇形排列
-        let valueIndex = 0;
-        let matchCount = 0;
-
-        for (const pos of snakePath) {
-            if (valueIndex >= sortedValues.length) break;
-
-            if (grid[pos.x][pos.y] === sortedValues[valueIndex]) {
-                matchCount++;
-                valueIndex++;
+        // 检查蛇形路径上前 N 个位置的值是否与排序后的值匹配
+        const checkLen = Math.min(8, sortedValues.length, snakePath.length);
+        let matches = 0;
+        for (let i = 0; i < checkLen; i++) {
+            if (grid[snakePath[i].x][snakePath[i].y] === sortedValues[i]) {
+                matches++;
             }
         }
 
-        // 计算匹配分数
-        const matchScore = nonZeroValues.length > 0 ? matchCount / Math.min(8, nonZeroValues.length) : 0;
+        const matchScore = checkLen > 0 ? matches / checkLen : 0;
 
         // 单调性匹配度
         const monotonicity = this.evaluateMonotonicity(grid);

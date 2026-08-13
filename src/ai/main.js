@@ -51,10 +51,6 @@ export class GameAI {
 
         const startTime = performance.now();
         this.nodesEvaluated = 0;
-        // 每次移动前清空转置表，避免占用过多内存
-        if (this.expectimaxAI) {
-            this.expectimaxAI.transpositionTable.clear();
-        }
 
         let direction;
         let activeAlgorithm = this.algorithm;
@@ -238,13 +234,13 @@ export class GameAI {
      * 随机模拟游戏过程
      */
     simulateRandomPlaythrough(grid, maxMoves) {
-        let currentGrid = JSON.parse(JSON.stringify(grid));
+        let currentGrid = grid.map(row => [...row]);
         let totalScore = 0;
         let movesCount = 0;
         let highestTile = this.evaluator.getHighestTile(currentGrid);
 
         // 随机玩到游戏结束或达到最大步数
-        while (movesCount < maxMoves && this.hasAvailableMoves(currentGrid)) {
+        while (movesCount < maxMoves && this.evaluator.hasAvailableMoves(currentGrid)) {
             // 随机选择一个方向
             const direction = Math.floor(Math.random() * 4);
             const result = this.game.simulateMove(currentGrid, direction);
@@ -264,7 +260,6 @@ export class GameAI {
                 // 添加随机方块
                 this.addRandomTileToGrid(currentGrid);
             } else {
-                // 如果当前方向无效，尝试其他方向
                 let validMove = false;
                 for (let dir = 0; dir < 4; dir++) {
                     if (dir !== direction) {
@@ -273,6 +268,7 @@ export class GameAI {
                             currentGrid = testResult.grid;
                             totalScore += testResult.scoreDelta;
                             movesCount++;
+                            this.addRandomTileToGrid(currentGrid);
                             validMove = true;
                             break;
                         }
@@ -420,39 +416,6 @@ export class GameAI {
         if (nodesElement) {
             nodesElement.textContent = this.nodesEvaluated;
         }
-    }
-
-    /**
-     * 检查是否有可用移动
-     */
-    hasAvailableMoves(grid) {
-        // 检查是否有空格
-        for (let x = 0; x < this.game.size; x++) {
-            for (let y = 0; y < this.game.size; y++) {
-                if (grid[x][y] === 0) {
-                    return true;
-                }
-            }
-        }
-
-        // 检查相邻方块是否可合并
-        for (let x = 0; x < this.game.size; x++) {
-            for (let y = 0; y < this.game.size; y++) {
-                const val = grid[x][y];
-
-                // 检查右侧
-                if (x < this.game.size - 1 && grid[x + 1][y] === val) {
-                    return true;
-                }
-
-                // 检查下方
-                if (y < this.game.size - 1 && grid[x][y + 1] === val) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
     }
 
     /**

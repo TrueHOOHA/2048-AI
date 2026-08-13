@@ -11,6 +11,7 @@ export class ExpectimaxAI {
         this.nodesEvaluated = 0;
         // 转置表，用于缓存评估过的局面
         this.transpositionTable = new Map();
+        this.maxTableSize = 20000; // 转置表上限，防止无限增长
         // 方向权重：让AI优先考虑某些方向
         this.directionPreference = [1.05, 1.0, 0.95, 1.02]; // 上，右，下，左
     }
@@ -57,7 +58,7 @@ export class ExpectimaxAI {
         this.nodesEvaluated++;
 
         // 达到搜索深度或游戏结束时评估局面
-        if (depth === 0 || !this.hasAvailableMoves(grid, game)) {
+        if (depth === 0 || !this.evaluator.hasAvailableMoves(grid)) {
             return this.evaluator.evaluate(grid);
         }
 
@@ -95,17 +96,17 @@ export class ExpectimaxAI {
             } else {
                 let totalScore = 0;
                 // 使用启发式采样减少计算量
-                const sampleSize = depth <= 2 ? Math.min(3, availablePositions.length) : 1;
+                const sampleSize = Math.min(3, availablePositions.length);
                 const selectedPositions = this.selectPositionsForSampling(availablePositions, grid, sampleSize);
 
                 for (const pos of selectedPositions) {
                     // 添加2的情况（概率90%）
-                    const gridWith2 = JSON.parse(JSON.stringify(grid));
+                    const gridWith2 = grid.map(row => [...row]);
                     gridWith2[pos.x][pos.y] = 2;
                     totalScore += 0.9 * this.expectimax(gridWith2, depth - 1, true, game);
 
                     // 添加4的情况（概率10%）
-                    const gridWith4 = JSON.parse(JSON.stringify(grid));
+                    const gridWith4 = grid.map(row => [...row]);
                     gridWith4[pos.x][pos.y] = 4;
                     totalScore += 0.1 * this.expectimax(gridWith4, depth - 1, true, game);
                 }
@@ -114,7 +115,14 @@ export class ExpectimaxAI {
             }
         }
 
-        // 存储到转置表
+        // 存储到转置表（达到上限时清理一半）
+        if (this.transpositionTable.size >= this.maxTableSize) {
+            let cleared = 0;
+            for (const key of this.transpositionTable.keys()) {
+                this.transpositionTable.delete(key);
+                if (++cleared >= this.maxTableSize / 2) break;
+            }
+        }
         this.transpositionTable.set(gridKey, score);
         return score;
     }
@@ -159,39 +167,6 @@ export class ExpectimaxAI {
         // 按重要性排序并选择前N个
         positionScores.sort((a, b) => b.score - a.score);
         return positionScores.slice(0, sampleSize).map(item => item.pos);
-    }
-
-    /**
-     * 检查是否有可用移动
-     */
-    hasAvailableMoves(grid, game) {
-        // 检查是否有空格
-        for (let x = 0; x < game.size; x++) {
-            for (let y = 0; y < game.size; y++) {
-                if (grid[x][y] === 0) {
-                    return true;
-                }
-            }
-        }
-
-        // 检查相邻方块是否可合并
-        for (let x = 0; x < game.size; x++) {
-            for (let y = 0; y < game.size; y++) {
-                const val = grid[x][y];
-
-                // 检查右侧
-                if (x < game.size - 1 && grid[x + 1][y] === val) {
-                    return true;
-                }
-
-                // 检查下方
-                if (y < game.size - 1 && grid[x][y + 1] === val) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
     }
 
     /**

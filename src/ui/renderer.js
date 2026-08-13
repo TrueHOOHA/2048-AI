@@ -43,46 +43,78 @@ export class Renderer {
             return { moves, spawns, removes };
         }
 
-        // 记录 prev 中各位置的值
-        const prevMap = new Map();
+        // 收集 prev 和 cur 中所有非零瓦片
+        const prevTiles = [];
+        const curTiles  = [];
         for (let x = 0; x < this.game.size; x++) {
             for (let y = 0; y < this.game.size; y++) {
-                if (prev[x][y] !== 0) prevMap.set(`${x},${y}`, prev[x][y]);
+                if (prev[x][y] !== 0) prevTiles.push({ x, y, val: prev[x][y] });
+                if (this.game.grid.cells[x][y] !== 0) curTiles.push({ x, y, val: this.game.grid.cells[x][y] });
             }
         }
 
-        // 记录 prev 中所有键，用于检测移除
-        const prevKeys = new Set(prevMap.keys());
-        const curKeys = new Set();
+        // cur 位置集合 & prev 位置集合
+        const curKeySet = new Set(curTiles.map(t => `${t.x},${t.y}`));
+        const prevKeySet = new Set(prevTiles.map(t => `${t.x},${t.y}`));
 
-        for (let x = 0; x < this.game.size; x++) {
-            for (let y = 0; y < this.game.size; y++) {
-                const val = this.game.grid.cells[x][y];
-                if (val === 0) continue;
-                const key = `${x},${y}`;
-                curKeys.add(key);
+        // 建立 prev 的位置索引 map: "x,y" -> tile object
+        const prevMap = new Map();
+        for (const t of prevTiles) prevMap.set(`${t.x},${t.y}`, t);
 
-                if (prevMap.has(key)) {
-                    const prevVal = prevMap.get(key);
-                    if (val === prevVal) {
-                        // 值未变，无需动画
-                    } else if (val > prevVal) {
-                        // 合并：新瓦片在目标格弹出
-                        spawns.push({ value: val, x, y, merged: true });
+        // 合并标记：cur 中值比 prev 同位置大的位置
+        const mergeKeys = new Set();
+        for (const ct of curTiles) {
+            const pk = `${ct.x},${ct.y}`;
+            if (prevMap.has(pk) && ct.val > prevMap.get(pk).val) {
+                mergeKeys.add(pk);
+            }
+        }
+
+        // 分类处理每个 cur 瓦片
+        for (const ct of curTiles) {
+            const key = `${ct.x},${ct.y}`;
+
+            if (mergeKeys.has(key)) {
+                // 合并：目标格弹跳出现
+                spawns.push({ value: ct.val, x: ct.x, y: ct.y, merged: true });
+            } else if (prevMap.has(key) && prevMap.get(key).val === ct.val) {
+                // 值相同、位置相同 → 无需动画
+            } else if (prevMap.has(key) && prevMap.get(key).val !== ct.val) {
+                // 值变了但不在 mergeKeys 里（理论上不应该发生）→ 当作 spawn
+                spawns.push({ value: ct.val, x: ct.x, y: ct.y, merged: false });
+            } else {
+                // cur 有新位置，判断是 move 还是 spawn
+                // 找 prev 中值相同且不在 mergeKeys 中的瓦片，作为候选源
+                const candidates = prevTiles.filter(pt =>
+                    pt.val === ct.val && !mergeKeys.has(`${pt.x},${pt.y}`)
+                );
+
+                if (candidates.length > 0) {
+                    // 有候选源 → 移动动画（取最近的）
+                    let best = candidates[0], bestDist = Infinity;
+                    for (const c of candidates) {
+                        const dist = Math.abs(c.x - ct.x) + Math.abs(c.y - ct.y);
+                        if (dist < bestDist) { bestDist = dist; best = c; }
+                    }
+                    // 排除目标位置本身也是 prev 有但被合并的情况
+                    if (bestDist > 0) {
+                        moves.push({ fromKey: `${best.x},${best.y}`, fromX: best.x, fromY: best.y,
+                                     x: ct.x, y: ct.y, value: ct.val });
+                    } else {
+                        spawns.push({ value: ct.val, x: ct.x, y: ct.y, merged: false });
                     }
                 } else {
-                    // 新出现的位置：移动或新生成
-                    spawns.push({ value: val, x, y, merged: false });
+                    // 没有候选源 → 新生成
+                    spawns.push({ value: ct.val, x: ct.x, y: ct.y, merged: false });
                 }
             }
         }
 
-        // 计算被移除的瓦片（prev 有但 cur 没有，且不是合并产生的目标格）
-        const mergeKeys = new Set(spawns.filter(s => s.merged).map(s => `${s.x},${s.y}`));
-        for (const key of prevKeys) {
-            if (!curKeys.has(key) && !mergeKeys.has(key)) {
-                const [x, y] = key.split(',').map(Number);
-                removes.push({ x, y, key });
+        // 移除：prev 有但 cur 没有，且不是合并目标
+        for (const pt of prevTiles) {
+            const key = `${pt.x},${pt.y}`;
+            if (!curKeySet.has(key) && !mergeKeys.has(key)) {
+                removes.push({ x: pt.x, y: pt.y, key });
             }
         }
 

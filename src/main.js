@@ -137,6 +137,7 @@ export class GameController {
             aiMoveButton.addEventListener('click', () => {
                 this.prevGrid = this.game.grid.clone();
                 const dir = this.ai.makeOneMove();
+                console.log('AI dir:', dir, 'grid:', JSON.stringify(this.game.grid.cells));
                 this.renderer.render(this.prevGrid, dir ?? 0);
                 this.checkGameStatus();
             });

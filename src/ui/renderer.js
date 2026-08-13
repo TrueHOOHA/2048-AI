@@ -134,30 +134,26 @@ export class Renderer {
     }
 
     /**
-     * 移动瓦片：先瞬移到目标格，强制 reflow，再动画回到原位
-     * 这样视觉效果是瓦片从源滑到目标
+     * 移动瓦片：从源格平滑滑到目标格
      */
     moveTile(m) {
         if (!this.tileContainer || !m.el) {
-            // 找不到源元素，当作新建
             this.spawnTile({ value: m.value, x: m.x, y: m.y });
             return;
         }
 
         const el = m.el;
+        const src = this._pos(m.fromX, m.fromY);
         const dest = this._pos(m.x, m.y);
 
-        // 1. 移除 transition，将瓦片瞬移到目标位置
+        // 1. 移除 transition，将瓦片固定在源位置（确保当前视觉正确）
         el.style.transition = 'none';
-        el.style.transform = `translate(${dest.px}px, ${dest.py}px)`;
+        el.style.transform = `translate(${src.px}px, ${src.py}px)`;
+        void el.offsetWidth; // 强制 reflow，让浏览器接受源位置
 
-        // 2. 强制 reflow，让浏览器应用瞬移
-        void el.offsetWidth;
-
-        // 3. 恢复 transition，将瓦片动画回原位 (0,0)
-        // 由于瓦片已经在目标格的中心，translate(0,0) 就是停在目标格
+        // 2. 恢复 transition，滑向目标位置
         el.style.transition = 'transform 0.15s ease-in-out';
-        el.style.transform = 'translate(0, 0)';
+        el.style.transform = `translate(${dest.px}px, ${dest.py}px)`;
 
         el.dataset.key = `${m.x},${m.y}`;
         el.dataset.pos = `${m.x},${m.y}`;

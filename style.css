@@ -111,6 +111,7 @@ h1 {
 .tile.tile-merged {
     animation: tile-pop 0.2s ease-out forwards;
     z-index: 20;
+    transition: none;
 }
 
 .tile.tile-spawning {

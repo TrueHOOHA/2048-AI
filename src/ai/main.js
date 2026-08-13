@@ -99,83 +99,12 @@ export class GameAI {
         const highestTile = this.evaluator.getHighestTile(grid);
         const emptyTiles = this.evaluator.getAvailablePositions(grid).length;
 
-        // 优化的自适应策略:
-        // 1. 游戏早期：ExpectiMax - 快速决策和权重导向
-        // 2. 游戏中期：根据空格数量和最大方块权衡使用ExpectiMax或MCTS
-        // 3. 游戏后期（接近胜利）：使用混合算法全力推进
-
         if (highestTile >= 1024) {
-            // 接近胜利条件，使用混合算法
             return 'hybrid';
-        } else if (highestTile >= 512 || emptyTiles <= 5) {
-            // 达到中后期或空格少时使用MCTS进行更深入搜索
-            return 'mcts';
-        } else if (emptyTiles >= 12) {
-            // 游戏早期使用ExpectiMax快速决策
-            return 'expectimax';
-        } else {
-            // 中期阶段，基于当前局势平衡选择
-            const orderScore = this.evaluateBoardOrder(grid);
-            // 如果棋盘排列良好，用ExpectiMax加速；否则用MCTS深度探索
-            return orderScore > 0.7 ? 'expectimax' : 'mcts';
+        } else if (highestTile >= 256 || emptyTiles <= 6) {
+            return 'hybrid';
         }
-    }
-
-    /**
-     * 评估棋盘排列的有序性
-     */
-    evaluateBoardOrder(grid) {
-        // 检测蛇形模式的完整度
-        const snakePatternScore = this.evaluator.evaluateSnakePattern(grid);
-        // 检测角落策略的应用程度
-        const cornerStrategyScore = this.evaluateCornerStrategy(grid);
-
-        return (snakePatternScore * 0.7 + cornerStrategyScore * 0.3);
-    }
-
-    /**
-     * 评估角落策略效果
-     */
-    evaluateCornerStrategy(grid) {
-        // 检查最大数字是否在角落
-        const maxTile = this.evaluator.getHighestTile(grid);
-        const corners = [{x:0, y:0}, {x:0, y:3}, {x:3, y:0}, {x:3, y:3}];
-
-        for (const corner of corners) {
-            if (grid[corner.x][corner.y] === maxTile) {
-                return 1.0; // 最大数字在角落，满分
-            }
-        }
-
-        // 检查次大数字是否在角落或次角落位置
-        let secondMax = 0;
-        for (let x = 0; x < 4; x++) {
-            for (let y = 0; y < 4; y++) {
-                if (grid[x][y] > secondMax && grid[x][y] < maxTile) {
-                    secondMax = grid[x][y];
-                }
-            }
-        }
-
-        for (const corner of corners) {
-            if (grid[corner.x][corner.y] === secondMax) {
-                return 0.7; // 次大数字在角落
-            }
-        }
-
-        // 最大数字靠近角落
-        for (let x = 0; x < 4; x++) {
-            for (let y = 0; y < 4; y++) {
-                if (grid[x][y] === maxTile) {
-                    if ((x <= 1 && y <= 1) || (x <= 1 && y >= 2) || 
-                        (x >= 2 && y <= 1) || (x >= 2 && y >= 2)) {
-                        return 0.4; // 靠近某个角落
-                    }
-                }
-            }
-        }
-
-        return 0.1; // 没有形成角落策略
+        return 'expectimax';
     }
 
     /**
@@ -327,8 +256,12 @@ export class GameAI {
             this.depth = savedDepth;
             return direction;
         } else {
-            // 空格少时使用MCTS
-            return this.mctsDecision();
+            // 空格少时使用更深度的Expectimax
+            const savedDepth = this.depth;
+            this.depth = Math.min(this.depth + 1, 7);
+            const direction = this.expectimaxDecision();
+            this.depth = savedDepth;
+            return direction;
         }
     }
 

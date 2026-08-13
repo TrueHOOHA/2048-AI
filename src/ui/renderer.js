@@ -1,6 +1,6 @@
 /**
  * 2048游戏渲染器
- * 使用 left/top 定位 + transform 纯动画，不修改 DOM 瓦片 key
+ * 每次重建DOM，用transform动画驱动移动/合并/生成
  */
 export class Renderer {
     constructor(game) {
@@ -18,86 +18,44 @@ export class Renderer {
     }
 
     render(prev = null, direction = 0) {
-        if (!prev) {
-            this.renderFull();
-            this.updateScore();
-            return;
-        }
-        const { moves, merges, spawns, removes } = this.computeDiff(prev, direction);
-        for (const r of removes) {
-            const el = this.tileContainer?.querySelector(`.tile[data-pos="${r.x},${r.y}"]`);
-            if (el) {
-                el.style.transition = 'opacity 0.12s';
-                el.style.opacity = '0';
-                setTimeout(() => el.remove(), 130);
-            }
-        }
-        for (const m of moves) {
-            const el = this.tileContainer?.querySelector(`.tile[data-pos="${m.fromX},${m.fromY}"]`);
-            if (el) {
-                const src = this._pos(m.fromX, m.fromY);
-                const dest = this._pos(m.x, m.y);
-                // 1. 无 transition 设到源位置（当前即源位置，确保一致）
-                el.style.transition = 'none';
-                el.style.left = src.px + 'px';
-                el.style.top = src.py + 'px';
-                void el.offsetWidth;
-                // 2. 加 transition 后设到目标位置 → 触发滑动动画
-                el.style.transition = 'left 0.15s ease-in-out, top 0.15s ease-in-out';
-                el.style.left = dest.px + 'px';
-                el.style.top = dest.py + 'px';
-                el.dataset.pos = `${m.x},${m.y}`;
-            }
-        }
-        for (const s of spawns) {
-            this.createTile(s.value, s.x, s.y, false);
-        }
-        for (const m of merges) {
-            this.createTile(m.value, m.x, m.y, true);
-        }
-        this.updateScore();
-    }
-
-    renderFull() {
         if (!this.tileContainer) return;
+        const { moves, spawns, merges, removes } = this.computeDiff(prev, direction);
+
         this.tileContainer.innerHTML = '';
+
+        const moveKeys = new Set(moves.map(m => `${m.x},${m.y}`));
+        const spawnKeys = new Set(spawns.map(s => `${s.x},${s.y}`));
+        const mergeKeys = new Set(merges.map(m => `${m.x},${m.y}`));
+
+        // 静止瓦片：直接创建
         for (let x = 0; x < this.game.size; x++) {
             for (let y = 0; y < this.game.size; y++) {
                 const v = this.game.grid.cells[x][y];
-                if (v !== 0) {
-                    const tile = document.createElement('div');
-                    tile.className = `tile tile-${v}`;
-                    tile.dataset.pos = `${x},${y}`;
-                    tile.textContent = v;
-                    const pos = this._pos(x, y);
-                    tile.style.left = pos.px + 'px';
-                    tile.style.top = pos.py + 'px';
-                    this.tileContainer.appendChild(tile);
-                }
+                if (v === 0) continue;
+                const key = `${x},${y}`;
+                if (moveKeys.has(key) || spawnKeys.has(key) || mergeKeys.has(key)) continue;
+                this.tileContainer.appendChild(this._createTileEl(v, x, y));
             }
         }
-    }
 
-    createTile(value, x, y, merged) {
-        if (!this.tileContainer) return;
-        const pos = this._pos(x, y);
-        const tile = document.createElement('div');
-        tile.className = `tile tile-${value}`;
-        tile.dataset.pos = `${x},${y}`;
-        tile.textContent = value;
-        tile.style.left = pos.px + 'px';
-        tile.style.top = pos.py + 'px';
-        if (merged) {
-            tile.style.transform = 'scale(1)';
+        // 移动瓦片：先 offset 到源位置，再滑到目标
+        for (const m of moves) {
+            const srcPos = this._pos(m.fromX, m.fromY);
+            const destPos = this._pos(m.x, m.y);
+            const tile = this._createTileEl(m.value, m.x, m.y);
+            tile.style.transition = 'none';
+            tile.style.transform = `translate(${srcPos.px - destPos.px}px, ${srcPos.py - destPos.py}px)`;
             this.tileContainer.appendChild(tile);
             void tile.offsetWidth;
-            tile.style.transition = 'transform 0.1s ease-out';
-            tile.style.transform = 'scale(1.2)';
-            setTimeout(() => {
-                tile.style.transform = 'scale(1)';
-                setTimeout(() => { tile.style.transition = ''; }, 100);
-            }, 100);
-        } else {
+            tile.style.transition = 'transform 0.15s ease-in-out';
+            tile.style.transform = 'translate(0, 0)';
+            setTimeout(() => { tile.style.transition = ''; }, 150);
+        }
+
+        // 生成瓦片：缩放出现
+        for (const s of spawns) {
+            const tile = this._createTileEl(s.value, s.x, s.y);
+            tile.style.transition = 'none';
             tile.style.transform = 'scale(0)';
             tile.style.opacity = '0';
             this.tileContainer.appendChild(tile);
@@ -107,6 +65,32 @@ export class Renderer {
             tile.style.opacity = '1';
             setTimeout(() => { tile.style.transition = ''; }, 200);
         }
+
+        // 合并瓦片：弹跳出现
+        for (const m of merges) {
+            const tile = this._createTileEl(m.value, m.x, m.y);
+            this.tileContainer.appendChild(tile);
+            void tile.offsetWidth;
+            tile.style.transition = 'transform 0.1s ease-out';
+            tile.style.transform = 'scale(1.2)';
+            setTimeout(() => {
+                tile.style.transform = 'scale(1)';
+                setTimeout(() => { tile.style.transition = ''; }, 100);
+            }, 100);
+        }
+
+        this.updateScore();
+    }
+
+    _createTileEl(value, x, y) {
+        const pos = this._pos(x, y);
+        const tile = document.createElement('div');
+        tile.className = `tile tile-${value}`;
+        tile.dataset.pos = `${x},${y}`;
+        tile.textContent = value;
+        tile.style.left = pos.px + 'px';
+        tile.style.top = pos.py + 'px';
+        return tile;
     }
 
     computeDiff(prev, direction) {
@@ -144,6 +128,14 @@ export class Renderer {
             return lines;
         };
 
+        if (!prev) {
+            for (let x = 0; x < size; x++)
+                for (let y = 0; y < size; y++)
+                    if (this.game.grid.cells[x][y] !== 0)
+                        spawns.push({ value: this.game.grid.cells[x][y], x, y });
+            return { moves, spawns, merges, removes };
+        }
+
         for (const line of buildLines()) {
             const prevTiles = [];
             for (const c of line.cells) {
@@ -175,54 +167,41 @@ export class Renderer {
                         moves.push({ fromX: s.x, fromY: s.y, x: dest.x, y: dest.y, value: r.val });
                     }
                 } else {
-                    for (const src of r.srcs) {
-                        removes.push({ x: src.x, y: src.y });
-                    }
+                    for (const src of r.srcs) removes.push({ x: src.x, y: src.y });
                     merges.push({ value: r.val, x: dest.x, y: dest.y });
                 }
             }
         }
 
-        for (let x = 0; x < size; x++) {
-            for (let y = 0; y < size; y++) {
-                if (prev[x][y] !== 0 && !consumedPrev.has(`${x},${y}`)) {
+        for (let x = 0; x < size; x++)
+            for (let y = 0; y < size; y++)
+                if (prev[x][y] !== 0 && !consumedPrev.has(`${x},${y}`))
                     removes.push({ x, y });
-                }
-            }
-        }
 
-        for (let x = 0; x < size; x++) {
-            for (let y = 0; y < size; y++) {
-                const cv = this.game.grid.cells[x][y];
-                if (cv !== 0 && movedGrid[x][y] === 0) {
-                    spawns.push({ value: cv, x, y });
-                }
-            }
-        }
+        for (let x = 0; x < size; x++)
+            for (let y = 0; y < size; y++)
+                if (this.game.grid.cells[x][y] !== 0 && movedGrid[x][y] === 0)
+                    spawns.push({ value: this.game.grid.cells[x][y], x, y });
 
         return { moves, spawns, merges, removes };
     }
 
     updateScore() {
-        if (this.scoreContainer) {
-            this.scoreContainer.textContent = this.game.getScore();
-        }
-        if (this.bestScoreContainer) {
-            this.bestScoreContainer.textContent = this.game.getBestScore();
-        }
+        if (this.scoreContainer) this.scoreContainer.textContent = this.game.getScore();
+        if (this.bestScoreContainer) this.bestScoreContainer.textContent = this.game.getBestScore();
     }
 
     showMessage(message, type = '') {
         if (this.messageContainer) {
             this.messageContainer.style.display = 'flex';
             this.messageContainer.classList.remove('game-won', 'game-over');
-            if (type) { this.messageContainer.classList.add(type); }
+            if (type) this.messageContainer.classList.add(type);
             const p = this.messageContainer.querySelector('p');
-            if (p) { p.textContent = message; }
+            if (p) p.textContent = message;
         }
     }
 
     hideMessage() {
-        if (this.messageContainer) { this.messageContainer.style.display = 'none'; }
+        if (this.messageContainer) this.messageContainer.style.display = 'none';
     }
 }

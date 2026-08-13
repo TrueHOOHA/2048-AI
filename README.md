@@ -1,61 +1,77 @@
-# 2048 AI Game - 重构版
+# 2048 · 智合
 
-这是一个使用现代JavaScript模块化重构的2048游戏，包含AI算法实现。
+[![English](https://img.shields.io/badge/lang-English-blue.svg)](README_EN.md)
+
+一个带 AI 助手的 2048 益智游戏。使用现代 ES6 模块架构，内置高性能 Expectimax 搜索、自适应算法选择与暖色调响应式界面。
+
+## 特性
+
+- **AI 助手**：Expectimax 搜索（bitboard 位棋盘优化，搜索速度大幅提升）
+- **自适应算法**：根据局面动态选择 Expectimax / Hybrid，避免弱算法拖累
+- **可调搜索深度**：1-8 层实时调整，实时显示思考时间与评估节点数
+- **流畅动画**：瓦片移动、合并、生成均有平滑动画（纯 CSS transition 驱动）
+- **多线程就绪**：Web Worker 架构已就绪（`src/ai/ai-worker.js`），可在独立线程运行搜索
+- **暖色质感 UI**：木质渐变棋盘 + 玻璃拟态 AI 面板，桌面/移动端自适应
 
 ## 项目结构
 
 ```
-/workspace/
-├── 2048.html          # 游戏主页面
-├── style.css          # 样式文件
-├── src/               # 源代码目录
-│   ├── game/          # 游戏逻辑模块
-│   │   ├── grid.js    # 网格管理
-│   │   └── core.js    # 游戏核心逻辑
-│   ├── ai/            # AI算法模块
-│   │   ├── evaluator.js    # 局面评估器
-│   │   ├── expectimax.js   # Expectimax算法
-│   │   └── main.js         # AI主控制器
-│   ├── ui/            # UI模块
-│   │   └── renderer.js     # 渲染器
-│   └── main.js        # 主控制器
-├── package.json       # 项目配置
-└── README.md          # 项目说明
+├── index.html           # 游戏主页面（入口）
+├── style.css            # 样式文件
+├── src/
+│   ├── main.js          # 主控制器：协调游戏/AI/UI
+│   ├── game/
+│   │   ├── grid.js      # 网格数据结构
+│   │   └── core.js      # 游戏核心逻辑（移动、合并、胜负判断）
+│   ├── ai/
+│   │   ├── bitboard.js      # 位棋盘核心（64-bit BigInt + 查表加速）
+│   │   ├── evaluator.js     # 局面评估器（权重矩阵 + 幂值加权）
+│   │   ├── expectimax.js    # Expectimax 搜索（转置表 + 剪枝）
+│   │   ├── main.js          # AI 主控制器（算法选择与调度）
+│   │   ├── multi-thread.js  # Web Worker 管理器
+│   │   └── ai-worker.js     # 后台线程搜索（多线程就绪）
+│   └── ui/
+│       └── renderer.js  # 渲染器（瓦片动画 + 分数显示）
+└── package.json          # 项目配置（http-server）
 ```
 
-## 模块说明
+## 运行方法
 
-### 游戏逻辑模块 (`/src/game/`)
-- `grid.js`: 管理游戏网格数据结构
-- `core.js`: 实现游戏核心逻辑和移动操作
+```bash
+npm install          # 安装 http-server（可选，也可跳过）
+npx http-server -c-1 # 启动本地服务器（禁用缓存）
+```
 
-### AI算法模块 (`/src/ai/`)
-- `evaluator.js`: 实现局面评估函数
-- `expectimax.js`: 实现Expectimax算法
-- `main.js`: 集成多种AI算法的主控制器
+或直接用浏览器打开 `index.html`（ES module 需本地服务器支持）。
 
-### UI模块 (`/src/ui/`)
-- `renderer.js`: 负责游戏界面渲染
+### 操作
 
-### 主控制器 (`/src/main.js`)
-- 协调游戏逻辑、AI和UI组件
+- **方向键** 或 **WASD**：手动移动方块
+- **AI 走一步**：AI 计算一步最佳移动
+- **自动游戏**：AI 持续自动游玩
+- **算法选择**：ExpectiMax / MCTS / Hybrid / 自适应
+- **搜索深度**：1-8 层可调
 
-## 特性
+## AI 算法说明
 
-- **模块化设计**: 使用ES6模块系统，代码结构清晰
-- **AI算法**: 包含Expectimax、MCTS和混合算法
-- **自适应策略**: 根据游戏状态动态选择最优算法
-- **性能优化**: 使用转置表和启发式采样优化算法性能
+| 算法 | 说明 |
+|------|------|
+| **Expectimax** | 期望最大值搜索，使用 bitboard 加速 + 转置表 + 启发式采样 + 移动排序剪枝，是默认最强算法 |
+| **MCTS** | 蒙特卡洛树搜索（简化随机模拟版） |
+| **Hybrid** | 混合策略：高价值局面加深搜索，蛇形排列时维持蛇形 |
+| **自适应** | 根据最高方块和空格数动态选择 Expectimax / Hybrid |
 
-## 使用方法
+## 性能优化
 
-1. 打开 `2048.html` 文件即可在浏览器中运行游戏
-2. 使用方向键或WASD进行游戏
-3. 使用AI控制面板来选择不同的AI算法和调整参数
+- **Bitboard 位棋盘**：64-bit BigInt 表示棋盘，移动模拟用 65536 条预计算查表（O(1)），克隆仅复制一个整数
+- **转置表**：跨步骤缓存局面评估值，带大小上限（20000 条自动清理）
+- **搜索剪枝**：移动排序（右→下→左→上）+ 高分提前退出
+- **Web Worker**：搜索可迁移到后台线程，主线程不阻塞
 
-## AI算法说明
+## 许可证
 
-1. **Expectimax**: 基于期望最大值的经典算法
-2. **MCTS**: 蒙特卡洛树搜索算法
-3. **Hybrid**: 混合算法，结合多种策略
-4. **Adaptive**: 自适应算法，根据局势动态选择最优策略
+MIT License
+
+---
+
+[English README](README_EN.md)

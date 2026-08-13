@@ -1,5 +1,6 @@
 import { ExpectimaxAI } from './expectimax.js';
 import { Evaluator } from './evaluator.js';
+import { runSearch } from './multi-thread.js';
 
 /**
  * 2048游戏AI主类
@@ -46,7 +47,7 @@ export class GameAI {
     /**
      * 执行一次AI移动，返回移动方向（0-上 1-右 2-下 3-左，失败返回 null）
      */
-    makeOneMove() {
+    async makeOneMove() {
         if (this.game.isGameOver()) return null;
 
         const startTime = performance.now();
@@ -55,34 +56,28 @@ export class GameAI {
         let direction;
         let activeAlgorithm = this.algorithm;
 
-        // 如果是自适应算法，则根据局势动态选择最佳算法
         if (this.algorithm === 'adaptive') {
             activeAlgorithm = this.chooseAdaptiveAlgorithm();
             this.updateAlgorithmDisplay(activeAlgorithm);
         }
 
-        // 根据选择的算法决定下一步
         switch (activeAlgorithm) {
             case 'expectimax':
-                direction = this.expectimaxDecision();
+                direction = await this.expectimaxDecision();
                 break;
             case 'mcts':
                 direction = this.mctsDecision();
                 break;
             case 'hybrid':
-                direction = this.hybridDecision();
+                direction = await this.hybridDecision();
                 break;
             default:
-                direction = this.expectimaxDecision();
+                direction = await this.expectimaxDecision();
         }
 
         const endTime = performance.now();
-        const timeElapsed = endTime - startTime;
+        this.updateStats(endTime - startTime);
 
-        // 更新统计信息
-        this.updateStats(timeElapsed);
-
-        // 执行最佳移动方向
         if (direction !== null) {
             this.game.move(direction);
             this.game.checkGameStatus();
@@ -108,10 +103,13 @@ export class GameAI {
     }
 
     /**
-     * Expectimax决策
+     * Expectimax决策（多线程）
      */
-    expectimaxDecision() {
-        return this.expectimaxAI.getBestMove(this.game, this.depth);
+    async expectimaxDecision() {
+        const grid = this.game.getGrid();
+        const result = await runSearch(grid, this.depth);
+        this.nodesEvaluated = result.nodesEvaluated || 0;
+        return result.direction;
     }
 
     /**
@@ -229,37 +227,29 @@ export class GameAI {
     /**
      * 混合算法决策
      */
-    hybridDecision() {
+    async hybridDecision() {
         const grid = this.game.getGrid();
         const emptyTiles = this.evaluator.getAvailablePositions(grid).length;
         const highestTile = this.evaluator.getHighestTile(grid);
 
-        // 高级混合策略:
-        // 1. 接近2048时，使用超深度策略
-        // 2. 根据局面组织程度动态选择算法和参数
-
         if (highestTile >= 1024) {
-            // 接近胜利，使用更高深度的Expectimax
             const savedDepth = this.depth;
-            this.depth = Math.max(this.depth + 1, 6); // 临时增加深度
-            const direction = this.expectimaxDecision();
+            this.depth = Math.max(this.depth + 1, 6);
+            const direction = await this.expectimaxDecision();
             this.depth = savedDepth;
             return direction;
         } else if (this.evaluator.evaluateSnakePattern(grid) > 0.7) {
-            // 如果已经形成了良好的蛇形模式，使用专门的维持策略
             return this.maintainSnakePattern(grid);
         } else if (emptyTiles >= 8) {
-            // 空格较多时使用改进的ExpectiMax
             const savedDepth = this.depth;
-            this.depth = Math.min(this.depth + 1, 7); // 临时增加探索深度
-            const direction = this.expectimaxDecision();
+            this.depth = Math.min(this.depth + 1, 7);
+            const direction = await this.expectimaxDecision();
             this.depth = savedDepth;
             return direction;
         } else {
-            // 空格少时使用更深度的Expectimax
             const savedDepth = this.depth;
             this.depth = Math.min(this.depth + 1, 7);
-            const direction = this.expectimaxDecision();
+            const direction = await this.expectimaxDecision();
             this.depth = savedDepth;
             return direction;
         }
